@@ -22,6 +22,18 @@ from util import getVersion, safeFind
 
 
 def main(argv=None) -> None:
+    """
+    Entry point for the OP2 source-to-source translator.
+
+    Orchestrates the full translation pipeline: argument parsing, source file
+    parsing, validation, code generation for each target, and program
+    translation output. Supports C++ and Fortran OP2 applications and can
+    generate code for multiple backend targets (e.g. sequential, CUDA, OpenMP).
+
+    Args:
+        argv: Optional list of command-line arguments. If None, defaults to
+            sys.argv as per ArgumentParser behaviour.
+    """
     # Build arg parser
     parser = ArgumentParser(prog="op2-translator")
 
@@ -159,6 +171,22 @@ def main(argv=None) -> None:
 
 
 def write_file(path: Path, text: str, args: Namespace) -> None:
+    """
+    Write generated source text to a file, with safety checks.
+
+    Prevents accidental overwriting of input files by comparing the output
+    path against all input file paths. Also skips writing if the file already
+    exists and its content is identical to the new text, avoiding unnecessary
+    filesystem writes and preserving timestamps.
+
+    Args:
+        path: Destination file path to write to.
+        text: The generated source code content.
+        args: Parsed command-line arguments, used to check input file paths.
+
+    Raises:
+        SystemExit: If writing would overwrite an input file.
+    """
     if path.exists():
         for input_path in args.file_paths:
             if not path.samefile(input_path):
@@ -180,6 +208,27 @@ def write_file(path: Path, text: str, args: Namespace) -> None:
 
 
 def parse(args: Namespace, lang: Lang) -> Application:
+    """
+    Parse all input source files into an Application representation.
+
+    Parses each input file using the appropriate language parser. When the
+    language's AST is serializable (e.g. Fortran via fparser), parsing is
+    parallelised across a multiprocessing pool. Otherwise, files are parsed
+    sequentially.
+
+    Args:
+        args: Parsed command-line arguments containing file paths, include
+            directories, and preprocessor defines.
+        lang: The detected source language handler.
+
+    Returns:
+        An Application instance populated with parsed Program objects.
+
+    Raises:
+        SystemExit: If a Fortran syntax error is encountered during parallel
+            parsing.
+        ParseError: Propagated to the caller if an OP2 API parse error occurs.
+    """
     f_args = [(i, raw_path, lang, args) for i, raw_path in enumerate(args.file_paths, 1)]
 
     print(f"Parsing files:")
@@ -206,6 +255,24 @@ def parse(args: Namespace, lang: Lang) -> Application:
 
 
 def parse_file(i, raw_path, lang, args):
+    """
+    Parse a single source file into a Program representation.
+
+    Worker function used by both sequential and multiprocessing-based parsing.
+    Extracts include directories and preprocessor defines from the arguments
+    and delegates to the language-specific parser.
+
+    Args:
+        i: 1-based index of the file being parsed (used for progress display
+            in the caller).
+        raw_path: File path string of the source file to parse.
+        lang: The language handler providing the parseProgram method.
+        args: Parsed command-line arguments containing include directories (-I)
+            and preprocessor defines (-D).
+
+    Returns:
+        A Program object representing the parsed source file.
+    """
     include_dirs = set([Path(dir) for [dir] in args.I])
     defines = [define for [define] in args.D]
 
@@ -213,6 +280,24 @@ def parse_file(i, raw_path, lang, args):
 
 
 def validate(args: Namespace, lang: Lang, app: Application) -> None:
+    """
+    Run semantic validation on the parsed application and optionally dump the store.
+
+    Performs language-specific semantic checks on the parsed OP2 application
+    (e.g. verifying dat dimensions, map arities, and argument consistency).
+    If the --dump flag is set, serialises the application state to a JSON file
+    for debugging and inspection.
+
+    Args:
+        args: Parsed command-line arguments, including the dump flag and output
+            directory.
+        lang: The language handler used for validation rules.
+        app: The parsed Application to validate.
+
+    Raises:
+        OpError: Propagated to the caller if a semantic validation error is
+            detected.
+    """
     # Run semantic checks on the application
     app.validate(lang)
 
@@ -229,6 +314,23 @@ def validate(args: Namespace, lang: Lang, app: Application) -> None:
 
 
 def codegen(args: Namespace, scheme: Scheme, app: Application, force_soa: bool) -> None:
+    """
+    Generate backend-specific loop host kernels, constants, and master kernel files.
+
+    Iterates over all OP2 parallel loops in the application and generates
+    target-specific kernel source files using the provided translation scheme.
+    Also generates a constants module and a master kernel file if the scheme
+    requires them. Loops that cannot be fully translated for the target fall
+    back to a sequential implementation.
+
+    Args:
+        args: Parsed command-line arguments, including output directory, include
+            directories, preprocessor defines, and target configuration.
+        scheme: The translation scheme pairing a language with a backend target,
+            providing Jinja templates and generation methods.
+        app: The parsed and validated Application containing all loops and data.
+        force_soa: If True, force Struct-of-Arrays data layout for all dats.
+    """
     # Collect the paths of the generated files
     include_dirs = set([Path(dir) for [dir] in args.I])
     defines = [define for [define] in args.D]
@@ -302,6 +404,20 @@ def codegen(args: Namespace, scheme: Scheme, app: Application, force_soa: bool) 
 
 
 def isDirPath(path):
+    """
+    Validate that a path refers to an existing directory.
+
+    Used as an argparse type validator for directory arguments such as -o and -I.
+
+    Args:
+        path: The path string to validate.
+
+    Returns:
+        The path string unchanged if it is a valid directory.
+
+    Raises:
+        ArgumentTypeError: If the path does not point to an existing directory.
+    """
     if os.path.isdir(path):
         return path
     else:
@@ -309,6 +425,20 @@ def isDirPath(path):
 
 
 def isFilePath(path):
+    """
+    Validate that a path refers to an existing file.
+
+    Used as an argparse type validator for the positional file_paths argument.
+
+    Args:
+        path: The path string to validate.
+
+    Returns:
+        The path string unchanged if it is a valid file.
+
+    Raises:
+        ArgumentTypeError: If the path does not point to an existing file.
+    """
     if os.path.isfile(path):
         return path
     else:
