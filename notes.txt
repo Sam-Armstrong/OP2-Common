@@ -1,0 +1,40 @@
+
+What to do:
+
+Can LLVM Flang be used to parse OP2 Fortran source code and extract loop
+and kernel information with equivalent correctness to the existing translator,
+and with measurably better performance?
+
+Existing solution:
+
+
+Proposed solution:
+
+STAGE 1
+Parse the input source and extract the information we need from the Flang AST.
+Specifically need two things as output:
+  - The argument information for each op_par_loop
+  - The source code for each of the kernels, including all functions/subroutines that are called
+
+For 1 this should be fairly straightforward - there's some details to be careful of but more or
+less this should just be walking the Flang AST and pulling out the relevant information.
+
+2 requires resolving the reference to the kernel subroutine, then recursively finding the tree of
+dependencies. I don't think (?) Flang has a serializable AST or the ability to re-output the AST
+to source so for this we'll need to use the source line/character information to extract excerpts
+from the original source code.
+
+STAGE 2
+Here we'd use the loop metadata and the extracted kernels to validate that the kernels only
+perform operations permitted by the specified argument access types and other restrictions.
+This is reasonably involved as it requires tracking arguments through child subroutine calls
+to check read/write/increment validity - currently we have some scaffolding to allow us to
+inspect every time an argument is accessed, we'd need to implement the same for this.
+
+STAGE 3
+We've moved to translating Fortran kernel subroutines into C++ for much greater compiler
+compatibility and device targeting. Currently we do this off the fparser2 AST but there
+shouldn't be anything preventing us from doing the same from the Flang AST.
+
+Steps:
+- add LLVM Flang dependency
