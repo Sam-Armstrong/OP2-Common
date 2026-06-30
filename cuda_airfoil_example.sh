@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-APP_DIR="${ROOT_DIR}/apps/c/airfoil/airfoil_plain/dp"
+APP_DIR="${ROOT_DIR}/apps/fortran/airfoil/airfoil_plain/dp"
 GRID_URL="https://op-dsl.github.io/docs/OP2/new_grid.dat"
 
 # Supported toolchains: gnu, cray, intel, xl, nvhpc (nvhpc often used with CUDA)
@@ -12,6 +12,8 @@ export OP2_COMPILER="${OP2_COMPILER:-gnu}"
 
 # optional: set if CUDA is not on the default path (WSL example)
 export CUDA_INSTALL_PATH="/usr/local/cuda"
+export OP2_EXTRA_TRANSLATOR_FLAGS="--parser flang --verbose"
+export OP2_FLANG_SCAN="${ROOT_DIR:-${PWD}}/translator-v2/flang-scan/build/op2-flang-scan"
 
 # nvcc needs explicit -gencode: default SM must match your GPU (e.g. RTX 3080 = sm_86).
 # If unset, use the first GPU's compute capability from nvidia-smi, else Ampere sm_80+86.

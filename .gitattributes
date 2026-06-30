@@ -1,2 +1,3 @@
 * whitespace=tab-in-indent,space-before-tab,trailing-space,tabwidth=2
 Makefile whitespace=space-before-tab,trailing-space,tabwidth=2
+*.sh text eol=lf

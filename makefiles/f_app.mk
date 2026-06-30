@@ -1,5 +1,21 @@
 TRANSLATOR ?= $(ROOT_DIR)/translator-v2/op2-translator.sh -v
 
+# Extra flags forwarded to the OP2 translator (e.g. "--parser flang").
+# Use environment variable OP2_EXTRA_TRANSLATOR_FLAGS to inject flags from a
+# driver script without editing app Makefiles.
+OP2_EXTRA_TRANSLATOR_FLAGS ?=
+
+# Root directory for per-variant Fortran module output (-J). Override (e.g. under
+# /tmp) when building on WSL DrvFS (/mnt/c/...), where gfortran can fail writing .mod.
+F_APP_MOD_DIR ?= mod
+
+# Directory where the OP2 translator writes generated Fortran (default: ./generated).
+# Override on WSL DrvFS if mkdir/codegen hits PermissionError under /mnt/c.
+F_APP_GENERATED_DIR ?= generated
+
+# If codegen fails after mkdir, remove incomplete targets so the next build reruns codegen.
+.DELETE_ON_ERROR:
+
 ifneq ($(F_HAS_PARALLEL_BUILDS),true)
   .NOTPARALLEL:
 endif
@@ -7,7 +23,7 @@ endif
 PART_SIZE_ENV ?= 128
 FFLAGS += -DOP_PART_SIZE_1=$(PART_SIZE_ENV)
 
-APP_SRC_OP := $(APP_SRC:%.F90=generated/$(APP_NAME)/%.F90)
+APP_SRC_OP := $(APP_SRC:%.F90=$(F_APP_GENERATED_DIR)/$(APP_NAME)/%.F90)
 
 BASE_VARIANTS := seq genseq openmp cuda c_cuda c_hip
 
@@ -73,29 +89,30 @@ $(eval $(call ALL_template))
 ifeq ($(words $(filter %/f_app.mk,$(MAKEFILE_LIST))),1)
 clean:
 	-$(RM) $(foreach variant,$(ALL_VARIANTS),*_$(variant))
-	-$(RM) -rf generated
+	-$(RM) -rf $(F_APP_GENERATED_DIR)
 	-$(RM) *.o
-	-$(RM) -r mod
+	-$(RM) -r $(F_APP_MOD_DIR)
 endif
 
 define GENERATED_template =
-generated/$(APP_NAME): $(APP_SRC)
-	@mkdir -p $$@
-	$(TRANSLATOR) $(APP_EXTRA_FLAGS) $(APP_EXTRA_TRANSLATOR_FLAGS) $$^ -o $$@
+# Stamp file: an empty output dir alone is not enough (make would skip codegen).
+$(F_APP_GENERATED_DIR)/$(APP_NAME)/.codegen_stamp: $(APP_SRC)
+	@mkdir -p $$(dir $$@)
+	$(TRANSLATOR) $(APP_EXTRA_FLAGS) $(APP_EXTRA_TRANSLATOR_FLAGS) $(OP2_EXTRA_TRANSLATOR_FLAGS) $$^ -o $$(patsubst %/,%,$$(dir $$@))
 
-generate: generated/$(APP_NAME)
+generate: $(F_APP_GENERATED_DIR)/$(APP_NAME)/.codegen_stamp
 endef
 
 $(eval $(call GENERATED_template))
 
-mod/%:
+$(F_APP_MOD_DIR)/%:
 	@mkdir -p $@
 
 # $(1) = variant name
 define SRC_template =
-$(call UPPERCASE,$(1))_SRC := generated/$(APP_NAME)/$(2)/op2_consts.F90 \
-                              generated/$(APP_NAME)/$(2)/*_kernel.$(3) \
-                              generated/$(APP_NAME)/$(2)/op2_kernels.F90 \
+$(call UPPERCASE,$(1))_SRC := $(F_APP_GENERATED_DIR)/$(APP_NAME)/$(2)/op2_consts.F90 \
+                              $(F_APP_GENERATED_DIR)/$(APP_NAME)/$(2)/*_kernel.$(3) \
+                              $(F_APP_GENERATED_DIR)/$(APP_NAME)/$(2)/op2_kernels.F90 \
                               $(APP_SRC_OP)
 endef
 
@@ -118,11 +135,11 @@ include $(MAKEFILES_DIR)/lib_helpers.mk
 # $(4) = OP2 library for parallel variant
 # $(5) = extra module dependencies
 define RULE_template_base =
-$(APP_NAME)_$(1): $(if $(filter-out seq,$(1)),generated/$(APP_NAME)) | mod/$(APP_NAME)/$(1)
+$(APP_NAME)_$(1): $(if $(filter-out seq,$(1)),$(F_APP_GENERATED_DIR)/$(APP_NAME)/.codegen_stamp) | $(F_APP_MOD_DIR)/$(APP_NAME)/$(1)
 	$$(FC) $$(FFLAGS) $(2) $(APP_EXTRA_FLAGS) $$(F_MOD_OUT_OPT)$$| $(5) $$(OP2_MOD) \
 		$($(call UPPERCASE,$(1))_SRC) $(OP2_LIB_FOR_$(3)) $$(CXXLINK) -o $$@
 
-$(APP_NAME)_mpi_$(1): $(if $(filter-out seq,$(1)),generated/$(APP_NAME)) | mod/$(APP_NAME)/mpi_$(1)
+$(APP_NAME)_mpi_$(1): $(if $(filter-out seq,$(1)),$(F_APP_GENERATED_DIR)/$(APP_NAME)/.codegen_stamp) | $(F_APP_MOD_DIR)/$(APP_NAME)/mpi_$(1)
 	$$(MPIFC) $$(FFLAGS) $(2) $(APP_EXTRA_FLAGS) $$(F_MOD_OUT_OPT)$$| $(5) $$(OP2_MOD) \
 		$($(call UPPERCASE,$(1))_SRC) $(OP2_LIB_FOR_$(4)) $$(CXXLINK) -o $$@
 

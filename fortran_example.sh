@@ -13,6 +13,16 @@ GRID_URL="https://op-dsl.github.io/docs/OP2/new_grid.dat"
 export OP2_COMPILER="gnu"
 export CUDA_INSTALL_PATH="/usr/local/cuda"
 
+# Stage 1 parser selection for the OP2 Fortran translator.
+#   - fparser2 (default): pure-Python fparser2 walker, no extra dependencies.
+#   - flang:              LLVM Flang parser via translator-v2/flang-scan. Build
+#                         the helper binary first (see flang-scan/README.md)
+#                         and optionally set OP2_FLANG_SCAN to its location.
+# This flag is forwarded to op2-translator through makefiles/f_app.mk.
+# Uncomment the next line to switch this example over to Flang:
+export OP2_EXTRA_TRANSLATOR_FLAGS="--parser flang"
+export OP2_FLANG_SCAN="${ROOT_DIR:-${PWD}}/translator-v2/flang-scan/build/op2-flang-scan"
+
 for cmd in gcc g++ gfortran; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
         echo "This example needs ${cmd} on PATH (e.g. build-essential and gfortran on Debian/Ubuntu)." >&2
@@ -49,6 +59,12 @@ if [[ "${ROOT_DIR}" == /mnt/* ]]; then
     mkdir -p "${F_APP_GENERATED_DIR}" "${F_APP_MOD_DIR}"
     unset _app_out
 fi
+
+# Incremental "make" skips the OP2 translator when .codegen_stamp is newer than
+# the Fortran sources, so a typical rebuild does not re-run translator-v2.
+# Remove the stamp for airfoil_plain genseq so this example always runs codegen.
+GENDIR="${F_APP_GENERATED_DIR:-${APP_DIR}/generated}"
+rm -f "${GENDIR}/airfoil_plain/.codegen_stamp"
 
 # Build only the variants whose Fortran codegen schemes are registered:
 #   - seq:    developer sequential (no codegen)

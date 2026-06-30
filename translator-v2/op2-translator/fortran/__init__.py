@@ -15,6 +15,7 @@ from fparser.common.readfortran import FortranStringReader
 from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, _set_parent
 
+import fortran.flang_parser
 import fortran.parser
 import fortran.translator.program
 import fortran.validator
@@ -173,6 +174,13 @@ class Fortran(Lang):
     user_consts_module = None
     use_regex_translator = False
 
+    # Stage 1 parser backend: "fparser2" (default) or "flang".
+    # The "flang" backend shells out to the op2-flang-scan binary to extract
+    # op_par_loop / op_decl_const metadata. The fparser2 backend is still used
+    # to build the kernel entity graph needed by Stages 2 and 3 regardless.
+    stage1_parser = "fparser2"
+    flang_scan_bin = None
+
     parser = None
     fpp = None
 
@@ -187,6 +195,17 @@ class Fortran(Lang):
         parser.add_argument("--user-consts-module", help="(Fortran) Use a custom consts module", default=None)
         parser.add_argument(
             "--regex-program-translator", help="(Fortran) Use the regex-based program translator", action="store_true"
+        )
+        parser.add_argument(
+            "--parser",
+            help="(Fortran) Stage 1 parser backend (default: fparser2)",
+            choices=["fparser2", "flang"],
+            default="fparser2",
+        )
+        parser.add_argument(
+            "--flang-scan",
+            help="(Fortran) Path to the op2-flang-scan binary (used with --parser flang)",
+            default=None,
         )
 
     def parseArgs(self, args: Namespace) -> None:
@@ -213,6 +232,12 @@ class Fortran(Lang):
 
             if args.verbose:
                 print(f"Using regex program translator")
+
+        self.stage1_parser = getattr(args, "parser", "fparser2")
+        self.flang_scan_bin = getattr(args, "flang_scan", None)
+
+        if args.verbose:
+            print(f"Stage 1 Fortran parser: {self.stage1_parser}")
 
         fpp = os.path.dirname(sys.executable) + "/fpp"
         if os.path.exists(fpp):
@@ -286,7 +311,18 @@ class Fortran(Lang):
 
     def parseProgram(self, path: Path, include_dirs: Set[Path], defines: List[str]) -> Program:
         ast, source = self.parseFile(path, frozenset(include_dirs), frozenset(defines))
-        return fortran.parser.parseProgram(ast, source, path)
+        program = fortran.parser.parseProgram(ast, source, path)
+
+        if self.stage1_parser == "flang":
+            # Replace the loop / const metadata with data extracted by LLVM Flang.
+            # We still keep the fparser2 pass above because Stages 2 and 3 rely
+            # on Program.entities (and their fparser2 AST) for validation and
+            # kernel translation.
+            scan_bin = fortran.flang_parser.resolve_scan_binary(self.flang_scan_bin)
+            data = fortran.flang_parser.run_scan(source, path, scan_bin)
+            fortran.flang_parser.populate_program(program, data)
+
+        return program
 
     def translateProgram(self, program: Program, include_dirs: Set[Path], defines: List[str], force_soa: bool) -> str:
         if self.use_regex_translator:

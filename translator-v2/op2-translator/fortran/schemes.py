@@ -2,16 +2,52 @@ import copy
 import traceback
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
+import fortran.flang_writer as fwriter
 import fortran.translator.kernels as ftk
 import fortran.translator.kernels_c as ftk_c
 import op as OP
 from language import Lang
 from scheme import Scheme
-from store import Application, ParseError, Program
+from store import Application, Function, ParseError, Program
 from target import Target
 from util import find
+
+
+# -----------------------------------------------------------------------------
+# Helpers for routing kernel translation through the Flang code path.
+# -----------------------------------------------------------------------------
+
+# Schemes that have already warned the user that they fall back to fparser2
+# under --parser flang. Keyed by scheme name to keep the noise to one line per
+# scheme per translator run.
+_FLANG_FALLBACK_WARNED: set = set()
+
+
+def _warn_flang_fallback_once(lang: Lang, scheme_name: str) -> None:
+    if getattr(lang, "stage1_parser", "fparser2") != "flang":
+        return
+    if scheme_name in _FLANG_FALLBACK_WARNED:
+        return
+    _FLANG_FALLBACK_WARNED.add(scheme_name)
+    print(
+        f"Warning: --parser flang does not yet drive kernel translation for "
+        f"{scheme_name}; falling back to the fparser2 path for this scheme.",
+        file=sys.stderr,
+    )
+
+
+def _all_entities_have_flang_source(entities: Iterable) -> bool:
+    """Return True iff every entity is a Function and carries a flang_source."""
+    saw_any = False
+    for e in entities:
+        if not isinstance(e, Function):
+            return False
+        if not getattr(e, "flang_source", None):
+            return False
+        saw_any = True
+    return saw_any
 
 
 class FortranSeq(Scheme):
@@ -41,10 +77,25 @@ class FortranSeq(Scheme):
         kernel_entities = copy.deepcopy(kernel_entities)
         dependencies = copy.deepcopy(dependencies)
 
-        if self.lang.user_consts_module is None:
-            ftk.renameConsts(self.lang, kernel_entities + dependencies, app, lambda const: f"op2_const_{const}")
+        all_entities = kernel_entities + dependencies
 
-        return ftk.writeSource(kernel_entities + dependencies)
+        use_flang = (
+            getattr(self.lang, "stage1_parser", "fparser2") == "flang"
+            and _all_entities_have_flang_source(all_entities)
+        )
+
+        if use_flang:
+            if self.lang.user_consts_module is None:
+                fwriter.rename_consts(
+                    self.lang, all_entities, app, lambda const: f"op2_const_{const}"
+                )
+            return fwriter.write_source(all_entities)
+
+        if self.lang.user_consts_module is None:
+            ftk.renameConsts(
+                self.lang, all_entities, app, lambda const: f"op2_const_{const}"
+            )
+        return ftk.writeSource(all_entities)
 
 
 Scheme.register(FortranSeq)
@@ -152,6 +203,8 @@ class FortranCuda(Scheme):
         config: Dict[str, Any],
         kernel_idx: int,
     ) -> str:
+        _warn_flang_fallback_once(self.lang, f"Fortran/{self.target.name}")
+
         kernel_entities = app.findEntities(loop.kernel, program, [])  # TODO: Loop scope
         if len(kernel_entities) == 0:
             raise ParseError(f"unable to find kernel function: {loop.kernel}")
@@ -263,6 +316,8 @@ class FortranCSeq(Scheme):
         config: Dict[str, Any],
         kernel_idx: int,
     ) -> str:
+        _warn_flang_fallback_once(self.lang, f"Fortran/{self.target.name}")
+
         kernel_entities = app.findEntities(loop.kernel, program, [])
 
         assert(len(kernel_entities) == 1)
@@ -327,6 +382,8 @@ class FortranCCuda(Scheme):
         config: Dict[str, Any],
         kernel_idx: int,
     ) -> str:
+        _warn_flang_fallback_once(self.lang, f"Fortran/{self.target.name}")
+
         kernel_entities = app.findEntities(loop.kernel, program, [])
 
         assert(len(kernel_entities) == 1)

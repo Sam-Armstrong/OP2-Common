@@ -74,6 +74,14 @@ class Function(Entity):
     parameters: List[str] = field(default_factory=list)
     returns: Optional[OP.Type] = None
 
+    # NOTE: When Stage 1 runs with --parser flang, fortran.flang_parser sets a
+    # `flang_source` attribute on each matching Function via setattr. We do
+    # NOT declare it as a dataclass field here because simple-default fields
+    # (`x: T = None`) install a class-level attribute that fools the custom
+    # `Entity.__deepcopy__` into skipping the per-instance copy, so the
+    # attached source would silently vanish across a deepcopy. Treat it as
+    # a dynamic attribute read with `getattr(entity, "flang_source", None)`.
+
     def __str__(self):
         return f"Function(name='{self.name}', scope={self.scope}, depends={self.depends})"
 
