@@ -302,7 +302,12 @@ def validate(args: Namespace, lang: Lang, app: Application) -> None:
         OpError: Propagated to the caller if a semantic validation error is
             detected.
     """
-    # Run semantic checks on the application
+    # Lazily attach fparser2 ASTs for Flang Stage 1 before validation.
+    if hasattr(lang, "prepare_flang_fallback"):
+        include_dirs = set(Path(d[0]) for d in args.I)
+        defines = [d[0] for d in args.D]
+        lang.prepare_flang_fallback(app, include_dirs, defines)
+
     app.validate(lang)
 
     # Create a JSON dump

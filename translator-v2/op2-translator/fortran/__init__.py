@@ -16,6 +16,7 @@ from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, _set_parent
 
 import fortran.flang_parser
+import fortran.fparser2_fallback
 import fortran.parser
 import fortran.translator.program
 import fortran.validator
@@ -175,9 +176,9 @@ class Fortran(Lang):
     use_regex_translator = False
 
     # Stage 1 parser backend: "fparser2" (default) or "flang".
-    # The "flang" backend shells out to the op2-flang-scan binary to extract
-    # op_par_loop / op_decl_const metadata. The fparser2 backend is still used
-    # to build the kernel entity graph needed by Stages 2 and 3 regardless.
+    # With "flang", Stage 1 (loops, consts, kernel entities + source text) is
+    # built from op2-flang-scan JSON. fparser2 is loaded lazily as a fallback
+    # for validation, main-program translation, and non-seq kernel schemes.
     stage1_parser = "fparser2"
     flang_scan_bin = None
 
@@ -247,12 +248,35 @@ class Fortran(Lang):
             print(f"Using packaged fpp for Fortran parsing: {fpp}")
 
     def validate(self, app: Application) -> None:
-        # TODO: see fortran.parser
+        if fortran.flang_parser.app_has_flang_stage1(app):
+            fortran.flang_parser.resolve_flang_dependencies(app)
+
         for program in app.programs:
-            fortran.parser.parseFunctionDependencies(program, app)
+            if getattr(program, "stage1_backend", "fparser2") == "fparser2":
+                fortran.parser.parseFunctionDependencies(program, app)
 
         for loop, program in app.loops():
             fortran.validator.validateLoop(loop, program, app)
+
+    def prepare_flang_fallback(
+        self,
+        app: Application,
+        include_dirs: Set[Path],
+        defines: List[str],
+    ) -> None:
+        """
+        Lazily attach fparser2 ASTs to Flang-parsed programs before validation
+        or translation steps that still need an AST.
+        """
+        if not fortran.flang_parser.app_has_flang_stage1(app):
+            return
+
+        for program in app.programs:
+            if getattr(program, "stage1_backend", "fparser2") != "flang":
+                continue
+            fortran.fparser2_fallback.ensure_fparser2_ast(
+                self, program, include_dirs, defines
+            )
 
     def preprocess(self, path: Path, include_dirs: FrozenSet[Path], defines: FrozenSet[str]) -> str:
         if self.fpp:
@@ -310,22 +334,41 @@ class Fortran(Lang):
         return ast, source
 
     def parseProgram(self, path: Path, include_dirs: Set[Path], defines: List[str]) -> Program:
-        ast, source = self.parseFile(path, frozenset(include_dirs), frozenset(defines))
-        program = fortran.parser.parseProgram(ast, source, path)
+        source = self.preprocess(path, frozenset(include_dirs), frozenset(defines))
 
         if self.stage1_parser == "flang":
-            # Replace the loop / const metadata with data extracted by LLVM Flang.
-            # We still keep the fparser2 pass above because Stages 2 and 3 rely
-            # on Program.entities (and their fparser2 AST) for validation and
-            # kernel translation.
-            scan_bin = fortran.flang_parser.resolve_scan_binary(self.flang_scan_bin)
-            data = fortran.flang_parser.run_scan(source, path, scan_bin)
-            fortran.flang_parser.populate_program(program, data)
+            try:
+                scan_bin = fortran.flang_parser.resolve_scan_binary(self.flang_scan_bin)
+                data = fortran.flang_parser.run_scan(source, path, scan_bin)
+                return fortran.flang_parser.build_program_from_flang(path, source, data)
+            except ParseError as err:
+                print(
+                    f"Warning: Flang Stage 1 parse failed for {path}; "
+                    f"falling back to fparser2: {err}",
+                    file=sys.stderr,
+                )
 
+        try:
+            reader = FortranStringReader(source, include_dirs=list(include_dirs))
+            ast = self.parser(reader)
+        except fparser.two.utils.FortranSyntaxError as err:
+            raise FortranSyntaxError(str(err), path.name)
+
+        program = fortran.parser.parseProgram(ast, source, path)
+        setattr(program, "stage1_backend", "fparser2")
         return program
 
     def translateProgram(self, program: Program, include_dirs: Set[Path], defines: List[str], force_soa: bool) -> str:
-        if self.use_regex_translator:
+        if getattr(program, "stage1_backend", "fparser2") == "flang" and program.ast is None:
+            fortran.fparser2_fallback.ensure_fparser2_ast(self, program, include_dirs, defines)
+
+        if self.use_regex_translator or program.ast is None:
+            if program.ast is None and not self.use_regex_translator:
+                print(
+                    f"Warning: fparser2 AST unavailable for {program.path}; "
+                    f"using regex program translator fallback.",
+                    file=sys.stderr,
+                )
             return fortran.translator.program.translateProgram2(program, force_soa)
 
         return fortran.translator.program.translateProgram(program, force_soa)
