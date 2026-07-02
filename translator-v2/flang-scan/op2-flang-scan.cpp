@@ -73,8 +73,8 @@
 // Flang public headers used by this tool.
 //
 // We only depend on the parser layer (parsing.h, parse-tree*.h, provenance.h,
-// source.h, message.h, characters.h). Everything from Sema, FIR, MLIR or the
-// driver is intentionally excluded so the link surface stays small.
+// source.h, message.h). Everything from Sema, FIR, MLIR or the driver is
+// intentionally excluded so the link surface stays small.
 // -----------------------------------------------------------------------------
 #include "flang/Parser/parsing.h"
 #include "flang/Parser/parse-tree.h"
@@ -82,7 +82,6 @@
 #include "flang/Parser/provenance.h"
 #include "flang/Parser/source.h"
 #include "flang/Parser/message.h"
-#include "flang/Parser/characters.h"
 
 #include "llvm/Support/raw_ostream.h"
 
