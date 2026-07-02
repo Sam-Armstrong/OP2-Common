@@ -164,6 +164,12 @@ public:
     void boolValue(bool b) { comma(); out_ << (b ? "true" : "false"); markWrote(); }
     void nullValue() { comma(); out_ << "null"; markWrote(); }
 
+    // Splice in a pre-rendered JSON fragment verbatim (no quoting/escaping).
+    // Used to stitch together documents built with separate Json instances,
+    // e.g. when two output arrays need to be populated by a single
+    // interleaved tree walk (see BodyCollector).
+    void rawValue(const std::string &jsonText) { comma(); out_ << jsonText; markWrote(); }
+
     // Snapshot of the buffer; safe to call once the top-level object/array
     // has been closed.
     std::string str() const { return out_.str(); }
@@ -617,6 +623,422 @@ struct DependsCollector {
 };
 
 // =============================================================================
+// Kernel-body expression/statement serialization (for Stage 2 validation)
+// =============================================================================
+//
+// Stage 2 (op2-translator/fortran/validator.py) needs to inspect *how* each
+// kernel dummy parameter is used inside the kernel body: is it written when
+// it should only be read, is it incremented correctly, is it sliced in a
+// way that's incompatible with SIMD stride insertion, etc. The original
+// implementation walks fparser2's AST directly, using parent-pointer checks
+// (e.g. "is this Name the base of a Part_Ref?"). To run equivalent checks
+// without fparser2 (--parser flang), we serialize a simplified expression
+// tree for each subprogram's body and port the checks to walk that JSON
+// tree in Python (see fortran/flang_validator.py), where the "parent"
+// context is simply whatever the recursive walk was descending from.
+//
+// This is deliberately NOT a full unparse: we only capture the node shapes
+// the validator actually inspects (assignments, calls, array/section
+// subscripts, and the +/-/*//,** arithmetic skeleton needed by the
+// increment check). Anything else collapses to a "literal"/"raw" leaf
+// carrying the exact source text, which the Python side treats opaquely.
+//
+// Node shapes (all objects have a "kind" field):
+//   {"kind": "name", "value": "<identifier>"}
+//   {"kind": "literal"|"raw", "source": "<text>"}
+//   {"kind": "part_ref", "name": "<base identifier>", "subscripts": [...]}
+//       An unambiguous array-element/section reference (Designator ->
+//       DataRef -> ArrayElement). Each subscript is either a nested expr
+//       node (a scalar/vector index - Flang's grammar can't tell those
+//       apart without semantics), or a "triplet" object (below).
+//   {"kind": "triplet", "lower": expr|null, "upper": expr|null, "stride": expr|null}
+//       A subscript-triplet (`a:b`, `a:b:c`, `:`, ...) - the syntactic
+//       marker for a Fortran array *section*, which is what makes stride
+//       insertion unsafe.
+//   {"kind": "funcref", "name": "<callee>", "args": [...]}
+//       A parenthesised reference that Flang cannot yet disambiguate
+//       between "array element" and "function call" (no semantics have
+//       run). The Python side resolves this the same way DependsCollector's
+//       output is resolved: by checking whether "name" matches a known
+//       Function entity.
+//   {"kind": "binary", "op": "+"|"-"|"*"|"/"|"**", "left": expr, "right": expr}
+//   {"kind": "paren", "expr": expr}
+//   {"kind": "unary", "op": "+"|"-", "expr": expr}
+// =============================================================================
+
+static void emitBodyExpr(Json &json, const fp::Expr &e);
+
+// A SectionSubscript is either a plain (scalar- or vector-valued) IntExpr,
+// or a SubscriptTriplet. Only the latter is structurally distinguishable
+// from a plain index at parse time (colon syntax isn't valid anywhere
+// else), which is exactly the "is this a slice?" signal the validator needs.
+static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub) {
+    std::visit([&](const auto &alt) {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::SubscriptTriplet>) {
+            const auto &t = alt.t;
+            auto emitBound = [&](const char *key, const std::optional<fp::Subscript> &bound) {
+                json.key(key);
+                if (bound) {
+                    emitBodyExpr(json, bound->thing.thing.value());
+                } else {
+                    json.nullValue();
+                }
+            };
+            json.beginObject();
+            json.key("kind"); json.stringValue("triplet");
+            emitBound("lower", std::get<0>(t));
+            emitBound("upper", std::get<1>(t));
+            emitBound("stride", std::get<2>(t));
+            json.endObject();
+        } else {
+            // Subscript = ScalarIntExpr = Scalar<Integer<Indirection<Expr>>>.
+            emitBodyExpr(json, alt.thing.value());
+        }
+    }, sub.u);
+}
+
+// Emit a Designator (R901: object-name | array-element | ... | substring).
+// We only structurally decompose the two shapes the validator cares about
+// (plain Name, and array-element via a plain-Name base); everything else
+// (structure components, coindexed objects, substrings) becomes "raw".
+static void emitDesignator(Json &json, const fp::Designator &d) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::DataRef>) {
+            return std::visit([&](const auto &inner) -> bool {
+                using U = std::decay_t<decltype(inner)>;
+                if constexpr (std::is_same_v<U, fp::Name>) {
+                    json.beginObject();
+                    json.key("kind"); json.stringValue("name");
+                    json.key("value"); json.stringValue(toLower(inner.ToString()));
+                    json.endObject();
+                    return true;
+                } else if constexpr (std::is_same_v<U, Fortran::common::Indirection<fp::ArrayElement>>) {
+                    const fp::ArrayElement &ae = inner.value();
+                    return std::visit([&](const auto &baseAlt) -> bool {
+                        using V = std::decay_t<decltype(baseAlt)>;
+                        if constexpr (std::is_same_v<V, fp::Name>) {
+                            json.beginObject();
+                            json.key("kind"); json.stringValue("part_ref");
+                            json.key("name"); json.stringValue(toLower(baseAlt.ToString()));
+                            json.key("subscripts");
+                            json.beginArray();
+                            for (const auto &s : ae.Subscripts()) emitBodySubscript(json, s);
+                            json.endArray();
+                            json.endObject();
+                            return true;
+                        }
+                        return false;
+                    }, ae.Base().u);
+                } else {
+                    return false;
+                }
+            }, alt.u);
+        }
+        return false;
+    }, d.u);
+
+    if (!emitted) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("raw");
+        json.key("source"); json.stringValue(sourceText(d.source));
+        json.endObject();
+    }
+}
+
+// Emit a FunctionReference (ambiguous array-element-or-call, RHS-only).
+static void emitFuncRef(Json &json, const fp::FunctionReference &fr) {
+    const fp::Call &call = fr.v;
+    const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(call.t);
+    const auto &args = std::get<std::list<fp::ActualArgSpec>>(call.t);
+
+    std::optional<std::string> name = std::visit([](const auto &p) -> std::optional<std::string> {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, fp::Name>) {
+            return toLower(p.ToString());
+        } else {
+            return std::nullopt;
+        }
+    }, pd.u);
+
+    if (!name) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("raw");
+        json.key("source"); json.stringValue("<complex-procedure-designator>");
+        json.endObject();
+        return;
+    }
+
+    json.beginObject();
+    json.key("kind"); json.stringValue("funcref");
+    json.key("name"); json.stringValue(*name);
+    json.key("args");
+    json.beginArray();
+    for (const fp::ActualArgSpec &spec : args) {
+        const fp::ActualArg &aa = std::get<fp::ActualArg>(spec.t);
+        bool handled = std::visit([&](const auto &alt) -> bool {
+            using T = std::decay_t<decltype(alt)>;
+            if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Expr>>) {
+                emitBodyExpr(json, alt.value());
+                return true;
+            }
+            return false;
+        }, aa.u);
+        if (!handled) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("raw");
+            json.key("source"); json.stringValue("<unsupported-actual-arg>");
+            json.endObject();
+        }
+    }
+    json.endArray();
+    json.endObject();
+}
+
+// Emit a Variable (R902: designator | function-reference). Used for the LHS
+// of an AssignmentStmt, which - like any parenthesised reference - can in
+// principle parse as either shape until semantics run.
+static void emitVariable(Json &json, const fp::Variable &v) {
+    std::visit([&](const auto &alt) {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
+            emitDesignator(json, alt.value());
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::FunctionReference>>) {
+            emitFuncRef(json, alt.value());
+        }
+    }, v.u);
+}
+
+static void emitBodyExpr(Json &json, const fp::Expr &e) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+
+        if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
+            emitDesignator(json, alt.value());
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::FunctionReference>>) {
+            emitFuncRef(json, alt.value());
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::Expr::Parentheses>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("paren");
+            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::Expr::UnaryPlus>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("unary");
+            json.key("op"); json.stringValue("+");
+            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::Expr::Negate>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("unary");
+            json.key("op"); json.stringValue("-");
+            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::Expr::Add> || std::is_same_v<T, fp::Expr::Subtract> ||
+                              std::is_same_v<T, fp::Expr::Multiply> || std::is_same_v<T, fp::Expr::Divide> ||
+                              std::is_same_v<T, fp::Expr::Power>) {
+            const char *op = "+";
+            if constexpr (std::is_same_v<T, fp::Expr::Subtract>) op = "-";
+            else if constexpr (std::is_same_v<T, fp::Expr::Multiply>) op = "*";
+            else if constexpr (std::is_same_v<T, fp::Expr::Divide>) op = "/";
+            else if constexpr (std::is_same_v<T, fp::Expr::Power>) op = "**";
+
+            json.beginObject();
+            json.key("kind"); json.stringValue("binary");
+            json.key("op"); json.stringValue(op);
+            json.key("left"); emitBodyExpr(json, std::get<0>(alt.t).value());
+            json.key("right"); emitBodyExpr(json, std::get<1>(alt.t).value());
+            json.endObject();
+            return true;
+        }
+
+        return false;
+    }, e.u);
+
+    if (emitted) return;
+
+    // Literal constants and anything else we don't decompose (concat,
+    // relational/logical ops, %LOC, defined operators, ...) fall through to
+    // an opaque "literal" leaf carrying the source text.
+    json.beginObject();
+    json.key("kind"); json.stringValue("literal");
+    json.key("source"); json.stringValue(sourceText(e.source));
+    json.endObject();
+}
+
+// =============================================================================
+// NameCollector / LocalsCollector: local array declaration walker
+// =============================================================================
+//
+// Stage 2's "runtime dimension local arrays" check flags local arrays whose
+// declared bounds reference a kernel parameter or an OP2 const (both
+// runtime values - a red flag for stack-allocated arrays, especially on a
+// GPU). For every locally-declared array we collect the lower-cased name of
+// every identifier referenced anywhere in its shape-spec bound expressions;
+// Python cross-references that against the const/parameter list.
+// =============================================================================
+struct NameCollector {
+    std::vector<std::string> &out;
+    bool Pre(const fp::Name &n) { out.push_back(toLower(n.ToString())); return true; }
+    template <typename T> bool Pre(const T &) { return true; }
+    template <typename T> void Post(const T &) {}
+};
+
+struct LocalsCollector {
+    Json &json;   // emits directly into an open array of {"name", "dims"} objects
+
+    static const fp::ArraySpec *findArraySpecAttr(const std::list<fp::AttrSpec> &attrs) {
+        for (const auto &attr : attrs) {
+            if (const auto *spec = std::get_if<fp::ArraySpec>(&attr.u)) return spec;
+        }
+        return nullptr;
+    }
+
+    static std::vector<std::string> collectShapeDimNames(const fp::ArraySpec *spec) {
+        std::vector<std::string> names;
+        if (!spec) return names;
+        if (const auto *shapes = std::get_if<std::list<fp::ExplicitShapeSpec>>(&spec->u)) {
+            NameCollector nc{names};
+            for (const auto &shape : *shapes) fp::Walk(shape, nc);
+        }
+        return names;
+    }
+
+    // Pre(TypeDeclarationStmt): `TYPE, attrs :: entity-decl-list`. An
+    // entity's array-ness/shape can come either from its own `name(spec)`
+    // suffix or from a shared `dimension(spec)` attribute applying to the
+    // whole entity-decl-list; we check both, matching fparser2's fallback.
+    bool Pre(const fp::TypeDeclarationStmt &decl) {
+        const auto &attrs = std::get<std::list<fp::AttrSpec>>(decl.t);
+        const fp::ArraySpec *attrArraySpec = findArraySpecAttr(attrs);
+
+        const auto &entityDecls = std::get<std::list<fp::EntityDecl>>(decl.t);
+        for (const auto &entityDecl : entityDecls) {
+            const fp::Name &nameNode = std::get<fp::ObjectName>(entityDecl.t);
+            const auto &ownSpec = std::get<std::optional<fp::ArraySpec>>(entityDecl.t);
+
+            const fp::ArraySpec *spec = ownSpec ? &*ownSpec : attrArraySpec;
+            if (!spec) continue;
+
+            std::vector<std::string> dims = collectShapeDimNames(spec);
+
+            json.beginObject();
+            json.key("name"); json.stringValue(toLower(nameNode.ToString()));
+            json.key("dims");
+            json.beginArray();
+            for (const auto &d : dims) json.stringValue(d);
+            json.endArray();
+            json.endObject();
+        }
+        return true;
+    }
+
+    template <typename T> bool Pre(const T &) { return true; }
+    template <typename T> void Post(const T &) {}
+};
+
+// =============================================================================
+// BodyCollector: per-subprogram assignment/call walker (Stage 2 validation)
+// =============================================================================
+//
+// Walks one subprogram's Execution_Part and records every assignment
+// statement (lhs/rhs expr trees) and every direct subroutine call (`call
+// foo(...)`, with its own arg expr trees). Like fparser2's flat `fpu.walk`,
+// this deliberately ignores control-flow nesting (if/do/...) - none of the
+// Stage 2 checks care which branch/loop a statement lives in, only that it
+// exists somewhere in the body.
+//
+// Assignments and calls are written into two separate Json instances
+// (rather than the shared per-file `json`) because a single tree walk
+// interleaves the two statement kinds in source order, but the JSON
+// contract wants them as two separate arrays; see Json::rawValue.
+// =============================================================================
+struct BodyCollector {
+    Json &jsonAssignments;   // open array of {"line", "lhs", "rhs"}
+    Json &jsonCalls;         // open array of {"line", "name", "args"}
+    const fp::AllCookedSources &cooked;
+
+    std::pair<int, int> resolveLineCol(fp::CharBlock src) const {
+        if (src.empty()) return {0, 0};
+        auto prov = cooked.GetProvenanceRange(src);
+        if (!prov) return {0, 0};
+        auto pos = cooked.allSources().GetSourcePosition(prov->start());
+        if (pos) return {static_cast<int>(pos->line), static_cast<int>(pos->column)};
+        return {0, 0};
+    }
+
+    bool Pre(const fp::AssignmentStmt &assign) {
+        const auto &lhs = std::get<fp::Variable>(assign.t);
+        const auto &rhs = std::get<fp::Expr>(assign.t);
+        auto [line, col] = resolveLineCol(rhs.source);
+
+        jsonAssignments.beginObject();
+        jsonAssignments.key("line"); jsonAssignments.intValue(line);
+        jsonAssignments.key("lhs"); emitVariable(jsonAssignments, lhs);
+        jsonAssignments.key("rhs"); emitBodyExpr(jsonAssignments, rhs);
+        jsonAssignments.endObject();
+        return true;
+    }
+
+    bool Pre(const fp::CallStmt &call) {
+        const fp::Call &c = std::get<fp::Call>(call.t);
+        const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
+        const auto &args = std::get<std::list<fp::ActualArgSpec>>(c.t);
+
+        std::string name;
+        fp::CharBlock nameSrc;
+        bool gotName = std::visit([&](const auto &alt) -> bool {
+            using T = std::decay_t<decltype(alt)>;
+            if constexpr (std::is_same_v<T, fp::Name>) {
+                name = toLower(alt.ToString());
+                nameSrc = alt.source;
+                return true;
+            }
+            return false;
+        }, pd.u);
+
+        if (!gotName) return true;
+
+        auto [line, col] = resolveLineCol(nameSrc);
+
+        jsonCalls.beginObject();
+        jsonCalls.key("line"); jsonCalls.intValue(line);
+        jsonCalls.key("name"); jsonCalls.stringValue(name);
+        jsonCalls.key("args");
+        jsonCalls.beginArray();
+        for (const fp::ActualArgSpec &spec : args) {
+            const fp::ActualArg &aa = std::get<fp::ActualArg>(spec.t);
+            bool handled = std::visit([&](const auto &alt) -> bool {
+                using T = std::decay_t<decltype(alt)>;
+                if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Expr>>) {
+                    emitBodyExpr(jsonCalls, alt.value());
+                    return true;
+                }
+                return false;
+            }, aa.u);
+            if (!handled) {
+                jsonCalls.beginObject();
+                jsonCalls.key("kind"); jsonCalls.stringValue("raw");
+                jsonCalls.key("source"); jsonCalls.stringValue("<unsupported-actual-arg>");
+                jsonCalls.endObject();
+            }
+        }
+        jsonCalls.endArray();
+        jsonCalls.endObject();
+        return true;
+    }
+
+    template <typename T> bool Pre(const T &) { return true; }
+    template <typename T> void Post(const T &) {}
+};
+
+// =============================================================================
 // Scanner: top-level parse-tree visitor
 // =============================================================================
 //
@@ -820,7 +1242,9 @@ struct Scanner {
 
         emitSubprogram("subroutine_subprogram", name, line, col,
                        parameters, depends,
-                       spanningRange(startStmt.source, endStmt.source));
+                       spanningRange(startStmt.source, endStmt.source),
+                       std::get<fp::SpecificationPart>(sub.t),
+                       std::get<fp::ExecutionPart>(sub.t));
         return true;
     }
 
@@ -855,7 +1279,9 @@ struct Scanner {
 
         emitSubprogram("function_subprogram", name, line, col,
                        parameters, depends,
-                       spanningRange(startStmt.source, endStmt.source));
+                       spanningRange(startStmt.source, endStmt.source),
+                       std::get<fp::SpecificationPart>(fn.t),
+                       std::get<fp::ExecutionPart>(fn.t));
         return true;
     }
 
@@ -865,7 +1291,9 @@ struct Scanner {
                         int line, int col,
                         const std::vector<std::string> &parameters,
                         const std::set<std::string> &depends,
-                        fp::CharBlock bodyRange) {
+                        fp::CharBlock bodyRange,
+                        const fp::SpecificationPart &spec,
+                        const fp::ExecutionPart &exec) {
         json.beginObject();
         json.key("kind"); json.stringValue(kind);
         json.key("name"); json.stringValue(name);
@@ -896,6 +1324,30 @@ struct Scanner {
         } else {
             json.stringValue("");
         }
+
+        // Stage 2 validation data: local array declarations (for the
+        // runtime-dimension check) and a flattened assignment/call walk of
+        // the execution part (for read/inc/slice/const-write checks). See
+        // the LocalsCollector / BodyCollector doc comments above.
+        json.key("locals");
+        {
+            json.beginArray();
+            LocalsCollector lc{json};
+            fp::Walk(spec, lc);
+            json.endArray();
+        }
+
+        Json assignmentsJson, callsJson;
+        assignmentsJson.beginArray();
+        callsJson.beginArray();
+        BodyCollector bc{assignmentsJson, callsJson, cooked};
+        fp::Walk(exec, bc);
+        assignmentsJson.endArray();
+        callsJson.endArray();
+
+        json.key("assignments"); json.rawValue(assignmentsJson.str());
+        json.key("calls"); json.rawValue(callsJson.str());
+
         json.endObject();
     }
 

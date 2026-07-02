@@ -16,6 +16,7 @@ from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, _set_parent
 
 import fortran.flang_parser
+import fortran.flang_validator
 import fortran.fparser2_fallback
 import fortran.parser
 import fortran.translator.program
@@ -182,6 +183,12 @@ class Fortran(Lang):
     stage1_parser = "fparser2"
     flang_scan_bin = None
 
+    # Populated by parseArgs(); defaults kept here so validate()'s lazy
+    # fparser2 fallback has something sane to use even if parseArgs wasn't
+    # called (e.g. direct API use / tests).
+    _include_dirs: Set[Path] = set()
+    _defines: List[str] = []
+
     parser = None
     fpp = None
 
@@ -237,6 +244,11 @@ class Fortran(Lang):
         self.stage1_parser = getattr(args, "parser", "fparser2")
         self.flang_scan_bin = getattr(args, "flang_scan", None)
 
+        # Stashed for the lazy fparser2 fallback in validate()/translateProgram()
+        # (only ever touched for programs/loops that actually need an AST).
+        self._include_dirs = set(Path(d[0]) for d in getattr(args, "I", []))
+        self._defines = [d[0] for d in getattr(args, "D", [])]
+
         if args.verbose:
             print(f"Stage 1 Fortran parser: {self.stage1_parser}")
 
@@ -256,26 +268,35 @@ class Fortran(Lang):
                 fortran.parser.parseFunctionDependencies(program, app)
 
         for loop, program in app.loops():
+            backend = getattr(program, "stage1_backend", "fparser2")
+
+            # Prefer the fparser2-free Flang validator whenever the kernel and
+            # all of its (transitive) dependencies were themselves parsed by
+            # Flang. Otherwise (e.g. --parser fparser2, a Flang parse failure
+            # for this file, or a dependency living in an fparser2-parsed
+            # file), lazily attach an fparser2 AST and fall back to the
+            # original AST-walking validator.
+            if backend == "flang" and fortran.flang_validator.can_validate_with_flang(loop, program, app):
+                fortran.flang_validator.validateLoop(loop, program, app)
+                continue
+
+            if backend == "flang":
+                # A dependency may live in a different (also Flang-parsed)
+                # program, so make sure every Flang-backed program in the
+                # app has an fparser2 AST before falling back - not just
+                # this loop's own program.
+                self._ensure_all_flang_programs_have_ast(app)
+
             fortran.validator.validateLoop(loop, program, app)
 
-    def prepare_flang_fallback(
-        self,
-        app: Application,
-        include_dirs: Set[Path],
-        defines: List[str],
-    ) -> None:
-        """
-        Lazily attach fparser2 ASTs to Flang-parsed programs before validation
-        or translation steps that still need an AST.
-        """
-        if not fortran.flang_parser.app_has_flang_stage1(app):
-            return
-
+    def _ensure_all_flang_programs_have_ast(self, app: Application) -> None:
         for program in app.programs:
             if getattr(program, "stage1_backend", "fparser2") != "flang":
                 continue
+            if program.ast is not None:
+                continue
             fortran.fparser2_fallback.ensure_fparser2_ast(
-                self, program, include_dirs, defines
+                self, program, self._include_dirs, self._defines
             )
 
     def preprocess(self, path: Path, include_dirs: FrozenSet[Path], defines: FrozenSet[str]) -> str:
@@ -359,8 +380,13 @@ class Fortran(Lang):
         return program
 
     def translateProgram(self, program: Program, include_dirs: Set[Path], defines: List[str], force_soa: bool) -> str:
-        if getattr(program, "stage1_backend", "fparser2") == "flang" and program.ast is None:
-            fortran.fparser2_fallback.ensure_fparser2_ast(self, program, include_dirs, defines)
+        # Main-program translation is a purely textual rewrite (see
+        # translateProgram2's docstring), so a Flang-parsed program never
+        # needs an fparser2 AST here - unlike validation/kernel translation,
+        # there's no AST-walking equivalent to fall back to in the first
+        # place.
+        if getattr(program, "stage1_backend", "fparser2") == "flang":
+            return fortran.translator.program.translateProgram2(program, force_soa)
 
         if self.use_regex_translator or program.ast is None:
             if program.ast is None and not self.use_regex_translator:

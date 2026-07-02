@@ -254,6 +254,21 @@ def _function_from_subprogram_event(event: Dict[str, Any], program: Program) -> 
     entity.parameters = parameters
     entity.depends = depends
     setattr(entity, "flang_source", str(event.get("source", "")))
+
+    # Stage 2 validation data (see fortran/flang_validator.py): a flattened
+    # walk of the execution part's assignments/calls plus local array
+    # declarations, both expressed as the simple expr-tree JSON documented
+    # in translator-v2/flang-scan/op2-flang-scan.cpp. Not a dataclass field
+    # for the same __deepcopy__ reason as flang_source (see store.py).
+    setattr(
+        entity,
+        "flang_body",
+        {
+            "locals": event.get("locals", []),
+            "assignments": event.get("assignments", []),
+            "calls": event.get("calls", []),
+        },
+    )
     return entity
 
 
@@ -269,6 +284,7 @@ def _merge_flang_entities(program: Program, flang_entities: List[Function]) -> N
             continue
 
         setattr(entity, "flang_source", getattr(sp, "flang_source", ""))
+        setattr(entity, "flang_body", getattr(sp, "flang_body", None))
         entity.depends = set(getattr(entity, "depends", set()) or set()) | set(sp.depends)
 
     existing = {entity.name.lower() for entity in program.entities}

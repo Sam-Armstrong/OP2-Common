@@ -149,10 +149,39 @@ translator-v2/op2-translator.sh --parser flang airfoil.F90 -o generated/
         {"kind": "int",    "value": 1},
         {"kind": "string", "value": "real(8)"}
       ]
+    },
+    {
+      "kind": "subroutine_subprogram",
+      "name": "res_calc",
+      "location": {"line": 60, "column": 15},
+      "parameters": ["x1", "x2", "q1", "q2", "adt1", "adt2", "res1", "res2"],
+      "depends": [],
+      "source": "subroutine res_calc(...)\n  ...\nend subroutine\n",
+      "locals": [
+        {"name": "dx", "dims": []}
+      ],
+      "assignments": [
+        {
+          "line": 82,
+          "lhs": {"kind": "funcref", "name": "res1", "args": [{"kind": "literal", "source": "1"}]},
+          "rhs": {
+            "kind": "binary", "op": "+",
+            "left":  {"kind": "funcref", "name": "res1", "args": [{"kind": "literal", "source": "1"}]},
+            "right": {"kind": "name", "value": "f"}
+          }
+        }
+      ],
+      "calls": []
     }
   ]
 }
 ```
+
+`locals`/`assignments`/`calls` are only used by Stage 2 validation (see
+below); Stage 1 only needs `name`/`parameters`/`depends`/`source`. Their
+expression-tree node shapes (`name`, `part_ref`, `funcref`, `triplet`,
+`binary`, `paren`, `unary`, `literal`/`raw`) are documented in the comment
+above `emitBodyExpr` in `op2-flang-scan.cpp`.
 
 ## Notes / limitations
 
@@ -161,12 +190,34 @@ translator-v2/op2-translator.sh --parser flang airfoil.F90 -o generated/
   (cooked-source slices from Flang). Recursive dependency closure runs in
   Python (`extractDependencies`). `Fortran/seq` kernel emission uses
   `fortran/flang_writer.py` without an fparser2 AST.
+- **Stage 2 (complete with `--parser flang`)**: `fortran/flang_validator.py`
+  ports every check in `fortran/validator.py` (parameter/const conflicts,
+  const writes, `OP_READ` writes, `OP_INC` increment shape, slice/stride
+  compatibility, runtime-dimension local arrays) to walk the `locals` /
+  `assignments` / `calls` expression trees above instead of an fparser2 AST,
+  including propagating checks through child subroutine/function calls
+  (the Flang equivalent of `fortran.util.mapParam`/`getCall`). A loop is
+  validated this way whenever its kernel and every transitive dependency
+  were parsed by Flang (`Function.flang_body` is set on all of them); this is
+  checked once per loop by `fortran.flang_validator.can_validate_with_flang`.
 - **fparser2 fallback**: if Flang scan fails for a file, Stage 1 falls back to
-  fparser2 for that file. After a successful Flang parse, fparser2 is still
-  loaded lazily for validation (Stage 2), main-program translation, and
-  schemes such as `Fortran/cuda` that mutate fparser2 AST nodes.
+  fparser2 for that file. If a loop's dependency closure includes an entity
+  without `flang_body` (e.g. it came from an fparser2-fallback file),
+  validation falls back to fparser2 for that loop too, lazily attaching an
+  AST to every Flang-parsed program in the app. Main-program translation
+  (`op_par_loop`/`op_decl_const` call rewriting) is a text-only regex
+  transform (`translateProgram2`) and never needs an AST at all. Kernel
+  translation for schemes other than `Fortran/seq` (`Fortran/cuda`,
+  `c_seq`, `c_cuda`, `c_hip`) still walks an fparser2 AST and prints a
+  one-time warning when run under `--parser flang` - that part of Stage 3
+  hasn't been ported yet.
 - Only the free-form preprocessed output produced by the Python driver is
   supported. Fixed-form sources should be fpp/cpp-preprocessed to free-form
   first (which is what the driver already does).
 - The tool does not run Flang's semantic analysis; name resolution / type
-  checking of OP2 arguments stays on the Python side.
+  checking of OP2 arguments stays on the Python side. This is also why most
+  parenthesised references (`arr(i)`) show up as `funcref` rather than
+  `part_ref` - Flang can't yet tell "array element" from "function call"
+  without a symbol table, so `flang_validator.py` resolves that ambiguity
+  itself (`funcref` whose name matches a known `Function` entity is treated
+  as a call; otherwise it's treated as an array/parameter reference).

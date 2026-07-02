@@ -7,10 +7,39 @@ from store import Program
 
 
 def translateProgram2(program: Program, force_soa: bool) -> str:
+    """
+    Regex-based (AST-free) main-program translation.
+
+    This is the counterpart to `translateProgram` for programs that don't
+    have (and, under `--parser flang`, are never given) an fparser2 AST: it
+    rewrites `program.source` directly with a handful of targeted regexes
+    instead of walking/mutating a parse tree. It performs the same three
+    rewrites as the AST version:
+
+      1. `call op_decl_const(ptr, dim, 'type')` -> `call op_decl_const_ptr(ptr, dim)`,
+         routing const registration through the per-app `op2_consts` module's
+         generated per-constant subroutine (see consts.F90.jinja) instead of
+         the generic op2 runtime interface.
+      2. `call op_par_loop_N(kernel, set, ...)` -> `call op2_k_<file>_<n>_kernel("kernel", ...)`,
+         matching the per-loop host subroutine names the code generator emits.
+      3. Add `use op2_kernels` alongside `use op2_fortran_reference`.
+    """
     src = program.source
     kernel_id = 1
 
-    def repl(m):
+    flags = re.MULTILINE | re.IGNORECASE
+
+    def repl_const(m):
+        const_ptr = m.group(2)
+        return f"{m.group(1)}call op_decl_const_{const_ptr.lower()}({const_ptr}, {m.group(3).strip()})"
+
+    # The type argument is a character literal (e.g. "real(8)") that itself
+    # contains parentheses, so the dim argument is matched non-greedily up to
+    # the first comma and the type argument is matched greedily to the LAST
+    # ")" on the line (assumes - like the op_par_loop regex below - that the
+    # call fits on one logical line, true for translator-generated sources).
+
+    def repl_loop(m):
         nonlocal kernel_id
 
         r = f'{m.group(1)}call op2_k_{program.path.stem}_{kernel_id}_{m.group(2)}("{m.group(2)}", '
@@ -18,10 +47,28 @@ def translateProgram2(program: Program, force_soa: bool) -> str:
 
         return r
 
-    flags = re.MULTILINE | re.IGNORECASE
-
-    src = re.sub(r"^(\s*)call\s*op_par_loop_\d+\s*\(\s*(\w+)\s*,\s*", repl, src, flags=flags)
+    src = re.sub(
+        r"^(\s*)call\s*op_decl_const\s*\(\s*(\w+)\s*,\s*([^,]+),\s*.*\)\s*$",
+        repl_const,
+        src,
+        flags=flags,
+    )
+    src = re.sub(r"^(\s*)call\s*op_par_loop_\d+\s*\(\s*(\w+)\s*,\s*", repl_loop, src, flags=flags)
     src = re.sub(r"^(\s*)(use op2_fortran_reference)", r"\1\2\n\1use op2_kernels", src, flags=flags)
+
+    if force_soa:
+
+        def repl_soa(m):
+            call_args = m.group(3).strip()
+            new_args = f"{call_args}, 1" if call_args else "1"
+            return f"{m.group(1)}call {m.group(2)}_soa({new_args})"
+
+        src = re.sub(
+            r"^(\s*)call\s*(op_init|op_init_base|op_mpi_init)\s*\(([^)]*)\)",
+            repl_soa,
+            src,
+            flags=flags,
+        )
 
     return src
 

@@ -38,3 +38,25 @@ shouldn't be anything preventing us from doing the same from the Flang AST.
 
 Steps:
 - add LLVM Flang dependency
+
+STATUS
+Stage 1 and Stage 2 are implemented and complete for --parser flang (see
+translator-v2/flang-scan/README.md for details): op2-flang-scan builds a JSON
+description of each subprogram (parameters, dependency names, cooked source
+text for kernel emission, and now also a simplified expression-tree walk of
+its assignments/calls/local-array declarations), and
+op2-translator/fortran/flang_validator.py ports every Stage 2 check
+(read/const-write/increment/slice/runtime-dimension) to walk that JSON
+instead of an fparser2 AST. fparser2 is only used as a fallback: per-file, if
+Flang fails to parse a source file; per-loop, if validation needs a
+dependency that wasn't parsed by Flang; and per-scheme, for kernel
+translation schemes that haven't been ported yet (Fortran/c_seq, cuda,
+c_cuda, c_hip - these still walk an fparser2 AST and print a one-time
+warning). Fortran/seq kernel translation and Fortran main-program translation
+(op_par_loop/op_decl_const call rewriting) are both Flang-native. Verified
+end-to-end on apps/fortran/airfoil (genseq target): with --parser flang, the
+seq build+run path (Stage 1 parse, Stage 2 validation, kernel emission, and
+main-program translation) never invokes fparser2 at all.
+
+Stage 3 (translating kernels to C++) is not yet ported to the Flang path;
+that's what drives the Fortran/c_seq, cuda, c_cuda, c_hip fallback above.
