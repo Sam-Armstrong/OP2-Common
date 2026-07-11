@@ -283,6 +283,58 @@ def parse_file(i, raw_path, lang, args):
     return lang.parseProgram(Path(raw_path), include_dirs, defines)
 
 
+def _deps_dump(app: Application) -> dict:
+    """
+    Build a JSON-serialisable summary of kernel dependency trees.
+
+    Avoids dumping full ASTs / Program back-pointers (which form cycles).
+    """
+    functions = []
+    by_name = {}
+    for program in app.programs:
+        for entity in program.entities:
+            if not hasattr(entity, "depends"):
+                continue
+            name = str(entity.name).lower()
+            deps = sorted({str(d).lower() for d in (entity.depends or set())})
+            entry = {
+                "name": name,
+                "scope": list(getattr(entity, "scope", []) or []),
+                "depends": deps,
+                "path": str(program.path),
+            }
+            functions.append(entry)
+            by_name.setdefault(name, deps)
+
+    def closure(root: str) -> list:
+        seen = set()
+        stack = [root.lower()]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            for d in by_name.get(cur, []):
+                if d not in seen:
+                    stack.append(d)
+        return sorted(x for x in seen if x != root.lower())
+
+    loops = []
+    for program in app.programs:
+        for loop in program.loops:
+            kernel = str(getattr(loop, "kernel", "") or "").lower()
+            loops.append(
+                {
+                    "kernel": kernel,
+                    "depends": by_name.get(kernel, []),
+                    "depends_closure": closure(kernel) if kernel else [],
+                    "path": str(program.path),
+                }
+            )
+
+    return {"functions": functions, "loops": loops}
+
+
 def validate(args: Namespace, lang: Lang, app: Application) -> None:
     """
     Run semantic validation on the parsed application and optionally dump the store.
@@ -308,14 +360,13 @@ def validate(args: Namespace, lang: Lang, app: Application) -> None:
     # Flang's own data).
     app.validate(lang)
 
-    # Create a JSON dump
+    # Create a JSON dump (deps-focused; full __dict__ dump hits circular refs
+    # via Program <-> Entity.program back-pointers).
     if args.dump:
         store_path = Path(args.out, "store.json")
-        serializer = lambda o: getattr(o, "__dict__", "unserializable")
-
-        # Write application dump
+        dump = _deps_dump(app)
         with open(store_path, "w") as file:
-            file.write(json.dumps(app, default=serializer, indent=4))
+            file.write(json.dumps(dump, indent=4, default=str))
 
         print("Dumped store:", store_path, end="\n\n")
 

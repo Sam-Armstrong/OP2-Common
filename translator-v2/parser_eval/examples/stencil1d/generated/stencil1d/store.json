@@ -1,0 +1,42 @@
+{
+    "functions": [
+        {
+            "name": "scale_diff",
+            "scope": [],
+            "depends": [],
+            "path": "stencil1d.F90"
+        },
+        {
+            "name": "diffuse",
+            "scope": [],
+            "depends": [
+                "scale_diff"
+            ],
+            "path": "stencil1d.F90"
+        },
+        {
+            "name": "update",
+            "scope": [],
+            "depends": [],
+            "path": "stencil1d.F90"
+        }
+    ],
+    "loops": [
+        {
+            "kernel": "diffuse",
+            "depends": [
+                "scale_diff"
+            ],
+            "depends_closure": [
+                "scale_diff"
+            ],
+            "path": "stencil1d.F90"
+        },
+        {
+            "kernel": "update",
+            "depends": [],
+            "depends_closure": [],
+            "path": "stencil1d.F90"
+        }
+    ]
+}

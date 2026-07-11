@@ -17,3 +17,4 @@
 *.swp
 
 translator-v2/flang-scan/build
+translator-v2/parser_eval/out
