@@ -267,6 +267,18 @@ def _function_from_subprogram_event(event: Dict[str, Any], program: Program) -> 
             "locals": event.get("locals", []),
             "assignments": event.get("assignments", []),
             "calls": event.get("calls", []),
+            # Stage 3 kernel-to-C++ translation data (see
+            # fortran/flang_kernels_c.py): typed declarations and a fully
+            # nested statement tree, independent of the flattened Stage 2
+            # fields above. "is_function" disambiguates a function with no
+            # explicit RESULT(...) clause (result_name is None either way)
+            # from a subroutine, which fparser2 gets for free from the AST
+            # node type.
+            "decls": event.get("decls", []),
+            "stmts": event.get("stmts", []),
+            "is_function": str(event.get("kind", "")) == "function_subprogram",
+            "result_name": event.get("result_name"),
+            "result_type": event.get("result_type"),
         },
     )
     return entity

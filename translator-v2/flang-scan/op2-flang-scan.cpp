@@ -660,12 +660,102 @@ struct DependsCollector {
 //       run). The Python side resolves this the same way DependsCollector's
 //       output is resolved: by checking whether "name" matches a known
 //       Function entity.
-//   {"kind": "binary", "op": "+"|"-"|"*"|"/"|"**", "left": expr, "right": expr}
+//   {"kind": "binary", "op": "+"|"-"|"*"|"/"|"**"|"=="|"!="|"<"|"<="|">"|">="|
+//                            "&&"|"||"|"//", "left": expr, "right": expr}
+//       Arithmetic, relational (.EQ./.LT./...), logical (.AND./.OR./.EQV./
+//       .NEQV.) and character-concatenation (//) binary operators all share
+//       this shape; "op" is already the C++ spelling, not the Fortran one.
 //   {"kind": "paren", "expr": expr}
-//   {"kind": "unary", "op": "+"|"-", "expr": expr}
+//   {"kind": "unary", "op": "+"|"-"|"!", "expr": expr}
+//       "!" is Fortran's `.NOT.`.
+//   {"kind": "int_lit", "text": "<digits>", "kind_text": str|null}
+//   {"kind": "real_lit", "text": "<digits-with-exponent>", "kind_text": str|null}
+//       "text" is the literal's source spelling verbatim (so callers can
+//       decide how to render exponent letters / kind suffixes); "kind_text"
+//       is the raw source text of the kind selector, e.g. "8"/"RK"/"IK4",
+//       or null if none was written.
+//   {"kind": "logical_lit", "value": true|false}
+//   {"kind": "char_lit", "value": "<contents>"} (quotes/kind prefix stripped)
+//   {"kind": "unsupported", "tag": "<node-name>", "source": "<text>"}
+//       A Fortran expression form Stage 3 does not (yet) understand
+//       (defined operators, array/structure constructors, %LOC, complex
+//       literals, ...). The Python side raises a clear "unsupported"
+//       error pointing at the source text rather than guessing.
+//
+// Stage 2's checks only ever pattern-match on "name"/"part_ref"/"funcref"/
+// "binary"/"paren"/"unary" and silently skip anything else, so adding the
+// literal/unsupported leaf shapes above is backwards compatible with
+// fortran/flang_validator.py.
 // =============================================================================
 
 static void emitBodyExpr(Json &json, const fp::Expr &e);
+
+// Render a KindParam (R709: `_kind`, e.g. the `8`/`RK`/`IK4` in `1_RK`) as
+// its raw source text. Kind selectors used in OP2 kernels are always a bare
+// digit string or a bare uppercase name, so callers can decide which one
+// they got with a simple `isdigit()`-style check; we deliberately don't try
+// to fold the digit case to an int here.
+static std::string kindParamToString(const fp::KindParam &kp) {
+    return std::visit([](const auto &alt) -> std::string {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, std::uint64_t>) {
+            return std::to_string(alt);
+        } else {
+            // Scalar<Integer<Constant<Name>>>
+            return toLower(alt.thing.thing.thing.ToString());
+        }
+    }, kp.u);
+}
+
+// Emit one of the four literal-constant leaf shapes (int/real/logical/char),
+// or an "unsupported" leaf for the handful of literal kinds OP2 kernels
+// never use (Hollerith, BOZ, unsigned, complex).
+static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::IntLiteralConstant>) {
+            const auto &cb = std::get<fp::CharBlock>(alt.t);
+            const auto &kindOpt = std::get<std::optional<fp::KindParam>>(alt.t);
+            json.beginObject();
+            json.key("kind"); json.stringValue("int_lit");
+            json.key("text"); json.stringValue(sourceText(cb));
+            json.key("kind_text");
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::RealLiteralConstant>) {
+            const auto &real = std::get<fp::RealLiteralConstant::Real>(alt.t);
+            const auto &kindOpt = std::get<std::optional<fp::KindParam>>(alt.t);
+            json.beginObject();
+            json.key("kind"); json.stringValue("real_lit");
+            json.key("text"); json.stringValue(sourceText(real.source));
+            json.key("kind_text");
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::LogicalLiteralConstant>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("logical_lit");
+            json.key("value"); json.boolValue(std::get<bool>(alt.t));
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::CharLiteralConstant>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("char_lit");
+            json.key("value"); json.stringValue(std::get<std::string>(alt.t));
+            json.endObject();
+            return true;
+        }
+        return false;
+    }, lit.u);
+
+    if (!emitted) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.key("tag"); json.stringValue("literal_constant");
+        json.endObject();
+    }
+}
 
 // A SectionSubscript is either a plain (scalar- or vector-valued) IntExpr,
 // or a SubscriptTriplet. Only the latter is structurally distinguishable
@@ -841,12 +931,34 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
             return true;
         } else if constexpr (std::is_same_v<T, fp::Expr::Add> || std::is_same_v<T, fp::Expr::Subtract> ||
                               std::is_same_v<T, fp::Expr::Multiply> || std::is_same_v<T, fp::Expr::Divide> ||
-                              std::is_same_v<T, fp::Expr::Power>) {
+                              std::is_same_v<T, fp::Expr::Power> || std::is_same_v<T, fp::Expr::Concat> ||
+                              std::is_same_v<T, fp::Expr::LT> || std::is_same_v<T, fp::Expr::LE> ||
+                              std::is_same_v<T, fp::Expr::EQ> || std::is_same_v<T, fp::Expr::NE> ||
+                              std::is_same_v<T, fp::Expr::GE> || std::is_same_v<T, fp::Expr::GT> ||
+                              std::is_same_v<T, fp::Expr::AND> || std::is_same_v<T, fp::Expr::OR> ||
+                              std::is_same_v<T, fp::Expr::EQV> || std::is_same_v<T, fp::Expr::NEQV>) {
+            // All of Fortran's binary intrinsic operators (arithmetic,
+            // relational, logical, concatenation) share the same
+            // IntrinsicBinary tuple<Indirection<Expr>, Indirection<Expr>>
+            // shape; only the spelling of "op" differs. We emit the C++
+            // spelling directly rather than the Fortran token, since the
+            // only consumer is Stage 3 code generation.
             const char *op = "+";
             if constexpr (std::is_same_v<T, fp::Expr::Subtract>) op = "-";
             else if constexpr (std::is_same_v<T, fp::Expr::Multiply>) op = "*";
             else if constexpr (std::is_same_v<T, fp::Expr::Divide>) op = "/";
             else if constexpr (std::is_same_v<T, fp::Expr::Power>) op = "**";
+            else if constexpr (std::is_same_v<T, fp::Expr::Concat>) op = "//";
+            else if constexpr (std::is_same_v<T, fp::Expr::LT>) op = "<";
+            else if constexpr (std::is_same_v<T, fp::Expr::LE>) op = "<=";
+            else if constexpr (std::is_same_v<T, fp::Expr::EQ>) op = "==";
+            else if constexpr (std::is_same_v<T, fp::Expr::NE>) op = "!=";
+            else if constexpr (std::is_same_v<T, fp::Expr::GE>) op = ">=";
+            else if constexpr (std::is_same_v<T, fp::Expr::GT>) op = ">";
+            else if constexpr (std::is_same_v<T, fp::Expr::AND>) op = "&&";
+            else if constexpr (std::is_same_v<T, fp::Expr::OR>) op = "||";
+            else if constexpr (std::is_same_v<T, fp::Expr::EQV>) op = "==";
+            else if constexpr (std::is_same_v<T, fp::Expr::NEQV>) op = "!=";
 
             json.beginObject();
             json.key("kind"); json.stringValue("binary");
@@ -855,6 +967,16 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
             json.key("right"); emitBodyExpr(json, std::get<1>(alt.t).value());
             json.endObject();
             return true;
+        } else if constexpr (std::is_same_v<T, fp::Expr::NOT>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("unary");
+            json.key("op"); json.stringValue("!");
+            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::LiteralConstant>) {
+            emitLiteralConstant(json, alt);
+            return true;
         }
 
         return false;
@@ -862,11 +984,14 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
 
     if (emitted) return;
 
-    // Literal constants and anything else we don't decompose (concat,
-    // relational/logical ops, %LOC, defined operators, ...) fall through to
-    // an opaque "literal" leaf carrying the source text.
+    // Anything else we don't decompose (array/structure constructors,
+    // %LOC, defined operators, complex literals, substring inquiries, ...)
+    // becomes an opaque "unsupported" leaf carrying the source text, so the
+    // Python side can raise a clear error rather than silently misreading
+    // it as a value.
     json.beginObject();
-    json.key("kind"); json.stringValue("literal");
+    json.key("kind"); json.stringValue("unsupported");
+    json.key("tag"); json.stringValue("expr");
     json.key("source"); json.stringValue(sourceText(e.source));
     json.endObject();
 }
@@ -1036,6 +1161,732 @@ struct BodyCollector {
     template <typename T> bool Pre(const T &) { return true; }
     template <typename T> void Post(const T &) {}
 };
+
+// =============================================================================
+// Parse-tree "unwrap" helpers
+// =============================================================================
+//
+// Flang wraps expressions in a chain of single-field "constraint" templates
+// (Scalar<>, Integer<>, Logical<>, Constant<>, common::Indirection<>) that
+// exist purely to document a grammar constraint (e.g. "this must be a
+// scalar integer expression") and carry no data of their own beyond a
+// `.thing` (or, for Indirection, a `.value()`) member wrapping the next
+// layer. These helpers thread through one specific chain each so the
+// declaration/statement emitters below can write `unwrapFoo(x)` instead of
+// repeating `x.thing.thing.thing.value()` everywhere.
+// =============================================================================
+static const fp::Expr &unwrapScalarIntExpr(const fp::ScalarIntExpr &e) { return e.thing.thing.value(); }
+static const fp::Expr &unwrapScalarLogicalExpr(const fp::ScalarLogicalExpr &e) { return e.thing.thing.value(); }
+static const fp::Expr &unwrapScalarExpr(const fp::ScalarExpr &e) { return e.thing.value(); }
+static const fp::Expr &unwrapConstantExpr(const fp::ConstantExpr &e) { return e.thing.value(); }
+static const fp::Expr &unwrapScalarIntConstantExpr(const fp::ScalarIntConstantExpr &e) { return e.thing.thing.thing.value(); }
+static const fp::Expr &unwrapSpecificationExpr(const fp::SpecificationExpr &e) { return unwrapScalarIntExpr(e.v); }
+
+// =============================================================================
+// Declaration serialization (for Stage 3 C++ code generation)
+// =============================================================================
+//
+// fortran/flang_kernels_c.py needs the same information
+// fortran/translator/kernels_c.py's `parseTypes` pulls out of an fparser2
+// Specification_Part: for every declared name, its intrinsic type (with
+// kind), whether it is an array (and if so its explicit-shape bounds), and
+// whether it is a compile-time PARAMETER (and if so, its value).
+//
+// Node shapes (all objects have a "kind" field):
+//   {"kind": "type_decl",
+//    "type": <type>,
+//    "is_parameter": bool,
+//    "dim": <array-spec>|null,        (a shared `dimension(...)` attribute)
+//    "entities": [{"name": str, "dim": <array-spec>|null, "init": expr|null}, ...]}
+//   {"kind": "parameter_stmt", "defs": [{"name": str, "value": expr}, ...]}
+//       The `PARAMETER(name = value, ...)` statement form (as opposed to
+//       the `type, PARAMETER :: name = value` attribute form, which shows
+//       up as a "type_decl" with is_parameter=true and a per-entity init).
+//   {"kind": "data_stmt", "sets": [...]}  (see emitDataStmtNode below)
+//
+// <type> shapes:
+//   {"kind": "intrinsic", "base": "integer"|"real"|"logical"|"character",
+//    "kind_text": str|null, "charlen": expr|null}
+//       "kind_text" is the raw kind-selector text (see kindParamToString);
+//       "charlen" is only meaningful when base == "character".
+//   {"kind": "unsupported"}
+//       A derived type, CLASS(*), or other declaration-type-spec Stage 3
+//       doesn't support.
+//
+// <array-spec> shapes:
+//   {"kind": "explicit", "shape": [{"lb": expr|null, "ub": expr}, ...]}
+//       Only explicit-shape (`(lb:ub)`) arrays are supported - the only
+//       kind that makes sense for a value/kernel-parameter array with no
+//       runtime shape information. lb is null when the spec omitted a
+//       lower bound (implying a lower bound of 1).
+//   {"kind": "unsupported"}
+//       Assumed-shape/deferred-shape/assumed-size/assumed-rank - none of
+//       which are legal for OP2 kernel parameters or locals anyway.
+//
+// Anything not recognised anywhere in this section (EXTERNAL statements,
+// USE statements, IMPLICIT statements, ...) is simply not emitted at all,
+// matching how the fparser2 path's `removeExternals` and
+// `translateSpecificationPart`'s `Use_Stmt`/`Implicit_Part` handling both
+// silently skip these constructs.
+// =============================================================================
+
+// R709 kind-param, as it appears on an intrinsic type spec (`REAL(8)`,
+// `INTEGER(kind=IK)`, ...). Returns nullopt for the (rare) `KIND=*`
+// assumed-size-character-style StarSize form, which Stage 3 doesn't need.
+static std::optional<std::string> kindSelectorText(const std::optional<fp::KindSelector> &ks) {
+    if (!ks) return std::nullopt;
+    if (const auto *sice = std::get_if<fp::ScalarIntConstantExpr>(&ks->u)) {
+        return sourceText(unwrapScalarIntConstantExpr(*sice).source);
+    }
+    return std::nullopt;
+}
+
+// R721 char-selector's length: either a plain expression (`(5)`, `(len=n)`)
+// or the legacy `*5` numeric form; emits an expr-shaped node either way.
+static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv) {
+    if (const auto *sie = std::get_if<fp::ScalarIntExpr>(&tpv.u)) {
+        emitBodyExpr(json, unwrapScalarIntExpr(*sie));
+        return;
+    }
+    // Star (assumed length, dummy args only) or Deferred (allocatable/
+    // pointer character) - neither is legal for an OP2 kernel local/param.
+    json.beginObject();
+    json.key("kind"); json.stringValue("unsupported");
+    json.key("tag"); json.stringValue("char_length");
+    json.endObject();
+}
+
+static void emitCharLength(Json &json, const fp::CharLength &cl) {
+    if (const auto *tpv = std::get_if<fp::TypeParamValue>(&cl.u)) {
+        emitTypeParamValue(json, *tpv);
+        return;
+    }
+    json.beginObject();
+    json.key("kind"); json.stringValue("int_lit");
+    json.key("text"); json.stringValue(std::to_string(std::get<std::uint64_t>(cl.u)));
+    json.key("kind_text"); json.nullValue();
+    json.endObject();
+}
+
+// R721 char-selector, in full: either a bare length-selector or the
+// `(LEN=..., KIND=...)` form (whose kind we ignore - Stage 3 only supports
+// default-kind CHARACTER, same as the fparser2 path).
+static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs) {
+    if (!cs) { json.nullValue(); return; }
+
+    std::visit([&](const auto &alt) {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::LengthSelector>) {
+            std::visit([&](const auto &inner) {
+                using U = std::decay_t<decltype(inner)>;
+                if constexpr (std::is_same_v<U, fp::TypeParamValue>) {
+                    emitTypeParamValue(json, inner);
+                } else {
+                    emitCharLength(json, inner);
+                }
+            }, alt.u);
+        } else {
+            // LengthAndKind: tuple<optional<TypeParamValue>, ScalarIntConstantExpr>.
+            const auto &lengthOpt = std::get<0>(alt.t);
+            if (lengthOpt) emitTypeParamValue(json, *lengthOpt);
+            else json.nullValue();
+        }
+    }, cs->u);
+}
+
+// R704 intrinsic-type-spec -> INTEGER|REAL|DOUBLE PRECISION|COMPLEX|
+//                             CHARACTER|LOGICAL [selector]
+static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its) {
+    std::visit([&](const auto &alt) {
+        using T = std::decay_t<decltype(alt)>;
+        json.beginObject();
+        if constexpr (std::is_same_v<T, fp::IntegerTypeSpec> ||
+                      std::is_same_v<T, fp::IntrinsicTypeSpec::Real> ||
+                      std::is_same_v<T, fp::IntrinsicTypeSpec::Logical>) {
+            json.key("kind"); json.stringValue("intrinsic");
+            json.key("base"); json.stringValue(
+                std::is_same_v<T, fp::IntegerTypeSpec> ? "integer" :
+                std::is_same_v<T, fp::IntrinsicTypeSpec::Real> ? "real" : "logical");
+            auto kt = kindSelectorText(alt.v);
+            json.key("kind_text"); if (kt) json.stringValue(*kt); else json.nullValue();
+            json.key("charlen"); json.nullValue();
+        } else if constexpr (std::is_same_v<T, fp::IntrinsicTypeSpec::Character>) {
+            json.key("kind"); json.stringValue("intrinsic");
+            json.key("base"); json.stringValue("character");
+            json.key("kind_text"); json.nullValue();
+            json.key("charlen"); emitCharLen(json, alt.v);
+        } else {
+            // UnsignedTypeSpec, DoublePrecision, Complex, DoubleComplex -
+            // none of these appear in real OP2 kernels.
+            json.key("kind"); json.stringValue("unsupported");
+        }
+        json.endObject();
+    }, its.u);
+}
+
+// R801 declaration-type-spec -> intrinsic-type-spec | TYPE(...) | CLASS(...) | ...
+static void emitDeclType(Json &json, const fp::DeclarationTypeSpec &dts) {
+    if (const auto *its = std::get_if<fp::IntrinsicTypeSpec>(&dts.u)) {
+        emitIntrinsicType(json, *its);
+        return;
+    }
+    json.beginObject();
+    json.key("kind"); json.stringValue("unsupported");
+    json.endObject();
+}
+
+// R816/R820 array-spec, restricted to the explicit-shape-spec-list case
+// (the only one that makes sense for a kernel parameter/local).
+static void emitArraySpec(Json &json, const fp::ArraySpec &spec) {
+    const auto *shapes = std::get_if<std::list<fp::ExplicitShapeSpec>>(&spec.u);
+    if (!shapes) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.endObject();
+        return;
+    }
+
+    json.beginObject();
+    json.key("kind"); json.stringValue("explicit");
+    json.key("shape");
+    json.beginArray();
+    for (const fp::ExplicitShapeSpec &dim : *shapes) {
+        const auto &lbOpt = std::get<0>(dim.t);
+        const auto &ub = std::get<1>(dim.t);
+
+        json.beginObject();
+        json.key("lb");
+        if (lbOpt) emitBodyExpr(json, unwrapSpecificationExpr(*lbOpt)); else json.nullValue();
+        json.key("ub"); emitBodyExpr(json, unwrapSpecificationExpr(ub));
+        json.endObject();
+    }
+    json.endArray();
+    json.endObject();
+}
+
+// An entity's own `= value` initializer (only meaningful when the
+// enclosing type-decl is PARAMETER; translateSpecificationPart in
+// fortran/flang_kernels_c.py errors out if a non-constant-expr
+// initialization shows up on a PARAMETER entity).
+static void emitInitialization(Json &json, const std::optional<fp::Initialization> &init) {
+    if (!init) { json.nullValue(); return; }
+    if (const auto *ce = std::get_if<fp::ConstantExpr>(&init->u)) {
+        emitBodyExpr(json, unwrapConstantExpr(*ce));
+        return;
+    }
+    // NullInit, InitialDataTarget, or the legacy `/values/` DATA-like form -
+    // none of these are legal on a PARAMETER entity anyway.
+    json.beginObject();
+    json.key("kind"); json.stringValue("unsupported");
+    json.key("tag"); json.stringValue("initialization");
+    json.endObject();
+}
+
+static bool hasParameterAttr(const std::list<fp::AttrSpec> &attrs) {
+    for (const fp::AttrSpec &attr : attrs) {
+        if (std::holds_alternative<fp::Parameter>(attr.u)) return true;
+    }
+    return false;
+}
+
+// A DataStmtConstant (R841) is like a LiteralConstant but also allows the
+// signed-literal forms (used only inside DATA statements and complex
+// literal real/imaginary parts) and a bare named-constant reference.
+static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::LiteralConstant>) {
+            emitLiteralConstant(json, alt);
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::SignedIntLiteralConstant>) {
+            const auto &cb = std::get<fp::CharBlock>(alt.t);
+            const auto &kindOpt = std::get<std::optional<fp::KindParam>>(alt.t);
+            json.beginObject();
+            json.key("kind"); json.stringValue("int_lit");
+            json.key("text"); json.stringValue(sourceText(cb));
+            json.key("kind_text");
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::SignedRealLiteralConstant>) {
+            const auto &signOpt = std::get<0>(alt.t);
+            const auto &real = std::get<fp::RealLiteralConstant>(alt.t);
+            const auto &realCore = std::get<fp::RealLiteralConstant::Real>(real.t);
+            const auto &kindOpt = std::get<std::optional<fp::KindParam>>(real.t);
+            std::string text = sourceText(realCore.source);
+            if (signOpt && *signOpt == fp::Sign::Negative) text = "-" + text;
+            json.beginObject();
+            json.key("kind"); json.stringValue("real_lit");
+            json.key("text"); json.stringValue(text);
+            json.key("kind_text");
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
+            emitDesignator(json, alt.value());
+            return true;
+        }
+        return false;
+    }, dc.u);
+
+    if (!emitted) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.key("tag"); json.stringValue("data_stmt_constant");
+        json.endObject();
+    }
+}
+
+// R837/R838 data-stmt -> DATA data-stmt-set [[,] data-stmt-set]...
+//           data-stmt-set -> data-stmt-object-list / data-stmt-value-list /
+static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt) {
+    json.beginObject();
+    json.key("kind"); json.stringValue("data_stmt");
+    json.key("sets");
+    json.beginArray();
+    for (const fp::DataStmtSet &set : dstmt.v) {
+        const auto &objects = std::get<std::list<fp::DataStmtObject>>(set.t);
+        const auto &values = std::get<std::list<fp::DataStmtValue>>(set.t);
+
+        json.beginObject();
+
+        json.key("objects");
+        json.beginArray();
+        for (const fp::DataStmtObject &obj : objects) {
+            std::visit([&](const auto &alt) {
+                using T = std::decay_t<decltype(alt)>;
+                if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Variable>>) {
+                    emitVariable(json, alt.value());
+                } else {
+                    // DataImpliedDo - not used by OP2 kernels.
+                    json.beginObject();
+                    json.key("kind"); json.stringValue("unsupported");
+                    json.key("tag"); json.stringValue("data_implied_do");
+                    json.endObject();
+                }
+            }, obj.u);
+        }
+        json.endArray();
+
+        json.key("values");
+        json.beginArray();
+        for (const fp::DataStmtValue &val : values) {
+            const auto &repeatOpt = std::get<std::optional<fp::DataStmtRepeat>>(val.t);
+            const auto &constant = std::get<fp::DataStmtConstant>(val.t);
+
+            json.beginObject();
+            json.key("repeated"); json.boolValue(repeatOpt.has_value());
+            json.key("value"); emitDataStmtConstant(json, constant);
+            json.endObject();
+        }
+        json.endArray();
+
+        json.endObject();
+    }
+    json.endArray();
+    json.endObject();
+}
+
+// DeclCollector: walks one subprogram's Specification_Part (via fp::Walk,
+// so it doesn't matter whether a given statement landed in the
+// grammar's Implicit_Part or its Declaration_Construct list - both are
+// visited in source order) and appends one JSON node per declaration
+// construct it understands into the open `decls` array. Anything it
+// doesn't recognise (USE, IMPLICIT, EXTERNAL, ...) is simply never
+// visited by any of the Pre() overloads below and so contributes nothing,
+// which is exactly the "silently skip" behaviour the fparser2 path needs
+// (see removeExternals/translateSpecificationPart).
+struct DeclCollector {
+    Json &json;
+
+    static const fp::ArraySpec *findArraySpecAttr(const std::list<fp::AttrSpec> &attrs) {
+        for (const fp::AttrSpec &attr : attrs) {
+            if (const auto *spec = std::get_if<fp::ArraySpec>(&attr.u)) return spec;
+        }
+        return nullptr;
+    }
+
+    bool Pre(const fp::TypeDeclarationStmt &decl) {
+        const auto &declTypeSpec = std::get<fp::DeclarationTypeSpec>(decl.t);
+        const auto &attrs = std::get<std::list<fp::AttrSpec>>(decl.t);
+        const auto &entityDecls = std::get<std::list<fp::EntityDecl>>(decl.t);
+
+        const fp::ArraySpec *attrArraySpec = findArraySpecAttr(attrs);
+
+        json.beginObject();
+        json.key("kind"); json.stringValue("type_decl");
+        json.key("type"); emitDeclType(json, declTypeSpec);
+        json.key("is_parameter"); json.boolValue(hasParameterAttr(attrs));
+        json.key("dim");
+        if (attrArraySpec) emitArraySpec(json, *attrArraySpec); else json.nullValue();
+
+        json.key("entities");
+        json.beginArray();
+        for (const fp::EntityDecl &ed : entityDecls) {
+            const fp::Name &nameNode = std::get<fp::ObjectName>(ed.t);
+            const auto &ownSpec = std::get<std::optional<fp::ArraySpec>>(ed.t);
+            const auto &init = std::get<std::optional<fp::Initialization>>(ed.t);
+
+            json.beginObject();
+            json.key("name"); json.stringValue(toLower(nameNode.ToString()));
+            json.key("dim");
+            if (ownSpec) emitArraySpec(json, *ownSpec); else json.nullValue();
+            json.key("init"); emitInitialization(json, init);
+            json.endObject();
+        }
+        json.endArray();
+
+        json.endObject();
+        return true;
+    }
+
+    bool Pre(const fp::ParameterStmt &pstmt) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("parameter_stmt");
+        json.key("defs");
+        json.beginArray();
+        for (const fp::NamedConstantDef &def : pstmt.v) {
+            const fp::NamedConstant &nc = std::get<fp::NamedConstant>(def.t);
+            const fp::ConstantExpr &ce = std::get<fp::ConstantExpr>(def.t);
+
+            json.beginObject();
+            json.key("name"); json.stringValue(toLower(nc.v.ToString()));
+            json.key("value"); emitBodyExpr(json, unwrapConstantExpr(ce));
+            json.endObject();
+        }
+        json.endArray();
+        json.endObject();
+        return true;
+    }
+
+    bool Pre(const fp::DataStmt &dstmt) {
+        emitDataStmtNode(json, dstmt);
+        return true;
+    }
+
+    template <typename T> bool Pre(const T &) { return true; }
+    template <typename T> void Post(const T &) {}
+};
+
+// =============================================================================
+// Statement-tree serialization (for Stage 3 C++ code generation)
+// =============================================================================
+//
+// Unlike BodyCollector (which flattens the body for Stage 2's "does this
+// exist anywhere" checks), Stage 3 code generation needs control-flow
+// structure preserved - an `if`/`do` body must nest inside its construct,
+// not sit next to it in a flat list. This is a straightforward hand-written
+// recursive descent over Block (= list<ExecutionPartConstruct>), mirroring
+// fortran/translator/kernels_c.py's translateExecutionPart /
+// translateIfConstruct / translateBlockNonlabelDoConstruct - just building
+// a JSON tree instead of a C++ source string.
+//
+// Node shapes (all objects have a "kind" field):
+//   {"kind": "assign", "line": int, "lhs": <variable-expr>, "rhs": expr}
+//   {"kind": "call", "line": int, "name": str, "args": [expr, ...]}
+//   {"kind": "continue"}
+//   {"kind": "return"}
+//   {"kind": "stop"}
+//   {"kind": "write"}
+//       Always translated as a no-op/comment, matching translateWriteStmt;
+//       we don't bother capturing the write's format/arguments.
+//   {"kind": "if_stmt", "cond": expr, "stmt": <single nested stmt>}
+//       The single-line `IF (cond) stmt` form (R1139).
+//   {"kind": "if_construct",
+//    "branches": [{"cond": expr|null, "body": [stmt, ...]}, ...]}
+//       One entry per THEN/ELSE IF/ELSE block, in source order; "cond" is
+//       null for a trailing ELSE (there is at most one, always last).
+//   {"kind": "do", "mode": "counted"|"while"|"unsupported",
+//    "var": str, "lb": expr, "ub": expr, "step": expr|null,   (counted)
+//    "cond": expr,                                            (while)
+//    "body": [stmt, ...]}
+//       "counted" is `DO i = lb, ub[, step]`; "while" is `DO WHILE (cond)`;
+//       "unsupported" covers `DO CONCURRENT` and the bare infinite `DO`
+//       (neither of which fortran/translator/kernels_c.py's
+//       translateBlockNonlabelDoConstruct supports either).
+//   {"kind": "data_stmt", "sets": [...]}  (see emitDataStmtNode)
+//   {"kind": "unsupported", "tag": "<node-name>"}
+//       Anything else (ALLOCATE, GOTO, SELECT CASE, WHERE, labelled DO,
+//       ...) - matches the (mostly commented-out) gaps in
+//       fortran/translator/kernels_c.py's TRANSLATE_TABLE.
+// =============================================================================
+
+static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked);
+
+static std::pair<int, int> resolveLineColStmt(const fp::AllCookedSources &cooked, fp::CharBlock src) {
+    if (src.empty()) return {0, 0};
+    auto prov = cooked.GetProvenanceRange(src);
+    if (!prov) return {0, 0};
+    auto pos = cooked.allSources().GetSourcePosition(prov->start());
+    if (pos) return {static_cast<int>(pos->line), static_cast<int>(pos->column)};
+    return {0, 0};
+}
+
+// R1521 call-stmt, shared between statement-tree and (formerly) BodyCollector
+// use; unlike BodyCollector's copy this one is the canonical statement-tree
+// shape ("call" as a top-level statement kind, not nested under "kind":
+// "call" inside an object with a separate "line").
+static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::AllCookedSources &cooked) {
+    const fp::Call &c = std::get<fp::Call>(call.t);
+    const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
+    const auto &args = std::get<std::list<fp::ActualArgSpec>>(c.t);
+
+    std::string name;
+    fp::CharBlock nameSrc;
+    bool gotName = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::Name>) {
+            name = toLower(alt.ToString());
+            nameSrc = alt.source;
+            return true;
+        }
+        return false;
+    }, pd.u);
+
+    if (!gotName) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.key("tag"); json.stringValue("call_stmt");
+        json.endObject();
+        return;
+    }
+
+    auto [line, col] = resolveLineColStmt(cooked, nameSrc);
+
+    json.beginObject();
+    json.key("kind"); json.stringValue("call");
+    json.key("line"); json.intValue(line);
+    json.key("name"); json.stringValue(name);
+    json.key("args");
+    json.beginArray();
+    for (const fp::ActualArgSpec &spec : args) {
+        const fp::ActualArg &aa = std::get<fp::ActualArg>(spec.t);
+        bool handled = std::visit([&](const auto &alt) -> bool {
+            using T = std::decay_t<decltype(alt)>;
+            if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Expr>>) {
+                emitBodyExpr(json, alt.value());
+                return true;
+            }
+            return false;
+        }, aa.u);
+        if (!handled) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("unsupported");
+            json.key("tag"); json.stringValue("actual_arg");
+            json.endObject();
+        }
+    }
+    json.endArray();
+    json.endObject();
+}
+
+// R515 action-stmt. Covers every statement kind that can appear either as
+// its own line in a Block, or as the single trailing statement of a
+// single-line IF.
+static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCookedSources &cooked) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+
+        if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::AssignmentStmt>>) {
+            const fp::AssignmentStmt &as = alt.value();
+            const auto &lhs = std::get<fp::Variable>(as.t);
+            const auto &rhs = std::get<fp::Expr>(as.t);
+            auto [line, col] = resolveLineColStmt(cooked, rhs.source);
+
+            json.beginObject();
+            json.key("kind"); json.stringValue("assign");
+            json.key("line"); json.intValue(line);
+            json.key("lhs"); emitVariable(json, lhs);
+            json.key("rhs"); emitBodyExpr(json, rhs);
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::CallStmt>>) {
+            emitCallStmtNode(json, alt.value(), cooked);
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::ContinueStmt>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("continue");
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::IfStmt>>) {
+            const fp::IfStmt &ifs = alt.value();
+            const auto &cond = std::get<fp::ScalarLogicalExpr>(ifs.t);
+            const auto &inner = std::get<fp::UnlabeledStatement<fp::ActionStmt>>(ifs.t);
+
+            json.beginObject();
+            json.key("kind"); json.stringValue("if_stmt");
+            json.key("cond"); emitBodyExpr(json, unwrapScalarLogicalExpr(cond));
+            json.key("stmt"); emitActionStmt(json, inner.statement, cooked);
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::ReturnStmt>>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("return");
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::StopStmt>>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("stop");
+            json.endObject();
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::WriteStmt>>) {
+            json.beginObject();
+            json.key("kind"); json.stringValue("write");
+            json.endObject();
+            return true;
+        }
+
+        return false;
+    }, a.u);
+
+    if (!emitted) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.key("tag"); json.stringValue("action_stmt");
+        json.endObject();
+    }
+}
+
+// R1134 if-construct -> if-then-stmt block [else-if-stmt block]...
+//                       [else-stmt block] end-if-stmt
+static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::AllCookedSources &cooked) {
+    const auto &ifThen = std::get<fp::Statement<fp::IfThenStmt>>(ifc.t);
+    const auto &thenBlock = std::get<fp::Block>(ifc.t);
+    const auto &elseIfBlocks = std::get<std::list<fp::IfConstruct::ElseIfBlock>>(ifc.t);
+    const auto &elseBlockOpt = std::get<std::optional<fp::IfConstruct::ElseBlock>>(ifc.t);
+
+    json.beginObject();
+    json.key("kind"); json.stringValue("if_construct");
+    json.key("branches");
+    json.beginArray();
+
+    json.beginObject();
+    json.key("cond");
+    emitBodyExpr(json, unwrapScalarLogicalExpr(std::get<fp::ScalarLogicalExpr>(ifThen.statement.t)));
+    json.key("body"); emitBlock(json, thenBlock, cooked);
+    json.endObject();
+
+    for (const fp::IfConstruct::ElseIfBlock &eib : elseIfBlocks) {
+        const auto &stmt = std::get<fp::Statement<fp::ElseIfStmt>>(eib.t);
+        const auto &blk = std::get<fp::Block>(eib.t);
+
+        json.beginObject();
+        json.key("cond");
+        emitBodyExpr(json, unwrapScalarLogicalExpr(std::get<fp::ScalarLogicalExpr>(stmt.statement.t)));
+        json.key("body"); emitBlock(json, blk, cooked);
+        json.endObject();
+    }
+
+    if (elseBlockOpt) {
+        const auto &blk = std::get<fp::Block>(elseBlockOpt->t);
+
+        json.beginObject();
+        json.key("cond"); json.nullValue();
+        json.key("body"); emitBlock(json, blk, cooked);
+        json.endObject();
+    }
+
+    json.endArray();
+    json.endObject();
+}
+
+// R1119 do-construct -> nonlabel-do-stmt block end-do-stmt (labelled
+// label-do-stmt loops are deliberately left unsupported, same as
+// fortran/translator/kernels_c.py's `ctx.error("Unsupported labelled do
+// construct")`).
+static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::AllCookedSources &cooked) {
+    const auto &doStmt = std::get<fp::Statement<fp::NonLabelDoStmt>>(dc.t);
+    const auto &block = std::get<fp::Block>(dc.t);
+    const auto &loopControlOpt = std::get<std::optional<fp::LoopControl>>(doStmt.statement.t);
+
+    json.beginObject();
+    json.key("kind"); json.stringValue("do");
+
+    bool handled = false;
+    if (loopControlOpt) {
+        handled = std::visit([&](const auto &alt) -> bool {
+            using T = std::decay_t<decltype(alt)>;
+            if constexpr (std::is_same_v<T, fp::LoopControl::Bounds>) {
+                json.key("mode"); json.stringValue("counted");
+                json.key("var"); json.stringValue(toLower(alt.Name().thing.ToString()));
+                json.key("lb"); emitBodyExpr(json, unwrapScalarExpr(alt.Lower()));
+                json.key("ub"); emitBodyExpr(json, unwrapScalarExpr(alt.Upper()));
+                json.key("step");
+                if (alt.Step()) emitBodyExpr(json, unwrapScalarExpr(*alt.Step())); else json.nullValue();
+                return true;
+            } else if constexpr (std::is_same_v<T, fp::ScalarLogicalExpr>) {
+                json.key("mode"); json.stringValue("while");
+                json.key("cond"); emitBodyExpr(json, unwrapScalarLogicalExpr(alt));
+                return true;
+            }
+            return false; // Concurrent (DO CONCURRENT)
+        }, loopControlOpt->u);
+    }
+
+    if (!handled) {
+        json.key("mode"); json.stringValue("unsupported");
+    }
+
+    json.key("body"); emitBlock(json, block, cooked);
+    json.endObject();
+}
+
+// R510 execution-part-construct -> executable-construct | format-stmt |
+//                                  entry-stmt | data-stmt | namelist-stmt
+static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstruct &epc, const fp::AllCookedSources &cooked);
+
+// R514 executable-construct -> action-stmt | ... | do-construct |
+//                               if-construct | ...
+static void emitExecutableConstruct(Json &json, const fp::ExecutableConstruct &ec, const fp::AllCookedSources &cooked) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::Statement<fp::ActionStmt>>) {
+            emitActionStmt(json, alt.statement, cooked);
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::IfConstruct>>) {
+            emitIfConstruct(json, alt.value(), cooked);
+            return true;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::DoConstruct>>) {
+            emitDoConstruct(json, alt.value(), cooked);
+            return true;
+        }
+        return false;
+    }, ec.u);
+
+    if (!emitted) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.key("tag"); json.stringValue("executable_construct");
+        json.endObject();
+    }
+}
+
+static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstruct &epc, const fp::AllCookedSources &cooked) {
+    bool emitted = std::visit([&](const auto &alt) -> bool {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, fp::ExecutableConstruct>) {
+            emitExecutableConstruct(json, alt, cooked);
+            return true;
+        } else if constexpr (std::is_same_v<T, fp::Statement<Fortran::common::Indirection<fp::DataStmt>>>) {
+            emitDataStmtNode(json, alt.statement.value());
+            return true;
+        }
+        return false;
+    }, epc.u);
+
+    if (!emitted) {
+        json.beginObject();
+        json.key("kind"); json.stringValue("unsupported");
+        json.key("tag"); json.stringValue("execution_part_construct");
+        json.endObject();
+    }
+}
+
+static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked) {
+    json.beginArray();
+    for (const fp::ExecutionPartConstruct &epc : block) emitExecutionPartConstruct(json, epc, cooked);
+    json.endArray();
+}
 
 // =============================================================================
 // Scanner: top-level parse-tree visitor
@@ -1243,7 +2094,8 @@ struct Scanner {
                        parameters, depends,
                        spanningRange(startStmt.source, endStmt.source),
                        std::get<fp::SpecificationPart>(sub.t),
-                       std::get<fp::ExecutionPart>(sub.t));
+                       std::get<fp::ExecutionPart>(sub.t),
+                       /*fnStmt=*/nullptr);
         return true;
     }
 
@@ -1280,11 +2132,41 @@ struct Scanner {
                        parameters, depends,
                        spanningRange(startStmt.source, endStmt.source),
                        std::get<fp::SpecificationPart>(fn.t),
-                       std::get<fp::ExecutionPart>(fn.t));
+                       std::get<fp::ExecutionPart>(fn.t),
+                       &fnStmt);
         return true;
     }
 
-    // Shared writer for the two subprogram event shapes.
+    // Function_Stmt's optional RESULT(name) suffix - the variable that
+    // holds the return value inside the body, which defaults to the
+    // function's own name when no RESULT clause is present.
+    static std::optional<std::string> resultName(const fp::FunctionStmt &fnStmt) {
+        const auto &suffixOpt = std::get<std::optional<fp::Suffix>>(fnStmt.t);
+        if (!suffixOpt) return std::nullopt;
+        const auto &nameOpt = std::get<std::optional<fp::Name>>(suffixOpt->t);
+        if (!nameOpt) return std::nullopt;
+        return toLower(nameOpt->ToString());
+    }
+
+    // Function_Stmt's prefix (`REAL FUNCTION foo(...)`) return type, if any
+    // was written there (as opposed to being declared on a local variable
+    // matching the function/result name - the Python side falls back to
+    // that when this is absent, mirroring
+    // fortran/translator/kernels_c.py's parseFunctionTypeInfo).
+    static void resultType(Json &json, const fp::FunctionStmt &fnStmt) {
+        const auto &prefixes = std::get<std::list<fp::PrefixSpec>>(fnStmt.t);
+        for (const fp::PrefixSpec &spec : prefixes) {
+            if (const auto *dts = std::get_if<fp::DeclarationTypeSpec>(&spec.u)) {
+                emitDeclType(json, *dts);
+                return;
+            }
+        }
+        json.nullValue();
+    }
+
+    // Shared writer for the two subprogram event shapes. `fnStmt` is
+    // non-null only for function_subprogram events, and controls whether
+    // the function-specific "result_name"/"result_type" keys are emitted.
     void emitSubprogram(const std::string &kind,
                         const std::string &name,
                         int line, int col,
@@ -1292,7 +2174,8 @@ struct Scanner {
                         const std::set<std::string> &depends,
                         fp::CharBlock bodyRange,
                         const fp::SpecificationPart &spec,
-                        const fp::ExecutionPart &exec) {
+                        const fp::ExecutionPart &exec,
+                        const fp::FunctionStmt *fnStmt) {
         json.beginObject();
         json.key("kind"); json.stringValue(kind);
         json.key("name"); json.stringValue(name);
@@ -1346,6 +2229,32 @@ struct Scanner {
 
         json.key("assignments"); json.rawValue(assignmentsJson.str());
         json.key("calls"); json.rawValue(callsJson.str());
+
+        // Stage 3 data: full typed declarations and a nested statement
+        // tree (see the doc comments above DeclCollector / emitBlock).
+        // These are additive to (and independent of) the Stage 2 fields
+        // above - fortran/flang_kernels_c.py never reads "locals"/
+        // "assignments"/"calls", and fortran/flang_validator.py never
+        // reads "decls"/"stmts".
+        json.key("decls");
+        {
+            json.beginArray();
+            DeclCollector dc{json};
+            fp::Walk(spec, dc);
+            json.endArray();
+        }
+
+        json.key("stmts");
+        emitBlock(json, exec.v, cooked);
+
+        if (fnStmt != nullptr) {
+            json.key("result_name");
+            auto rn = resultName(*fnStmt);
+            if (rn) json.stringValue(*rn); else json.nullValue();
+
+            json.key("result_type");
+            resultType(json, *fnStmt);
+        }
 
         json.endObject();
     }

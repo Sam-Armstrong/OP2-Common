@@ -163,25 +163,50 @@ translator-v2/op2-translator.sh --parser flang airfoil.F90 -o generated/
       "assignments": [
         {
           "line": 82,
-          "lhs": {"kind": "funcref", "name": "res1", "args": [{"kind": "literal", "source": "1"}]},
+          "lhs": {"kind": "funcref", "name": "res1", "args": [{"kind": "int_lit", "text": "1", "kind_text": null}]},
           "rhs": {
             "kind": "binary", "op": "+",
-            "left":  {"kind": "funcref", "name": "res1", "args": [{"kind": "literal", "source": "1"}]},
+            "left":  {"kind": "funcref", "name": "res1", "args": [{"kind": "int_lit", "text": "1", "kind_text": null}]},
             "right": {"kind": "name", "value": "f"}
           }
         }
       ],
-      "calls": []
+      "calls": [],
+      "decls": [
+        {
+          "kind": "type_decl",
+          "type": {"kind": "intrinsic", "base": "real", "kind_text": "8"},
+          "dim": null,
+          "is_parameter": false,
+          "entities": [{"name": "dx", "dim": null, "init": null}]
+        }
+      ],
+      "stmts": [
+        {
+          "kind": "assign",
+          "line": 82,
+          "lhs": {"kind": "funcref", "name": "res1", "args": [{"kind": "int_lit", "text": "1", "kind_text": null}]},
+          "rhs": { "...": "same expr shape as assignments[].rhs above" }
+        }
+      ]
     }
   ]
 }
 ```
 
-`locals`/`assignments`/`calls` are only used by Stage 2 validation (see
-below); Stage 1 only needs `name`/`parameters`/`depends`/`source`. Their
-expression-tree node shapes (`name`, `part_ref`, `funcref`, `triplet`,
-`binary`, `paren`, `unary`, `literal`/`raw`) are documented in the comment
-above `emitBodyExpr` in `op2-flang-scan.cpp`.
+`locals`/`assignments`/`calls` are used by Stage 2 validation (see below) and
+by a couple of Stage 3 whole-body analyses (parameter const-ness, atomicAdd
+detection) that don't care about control-flow position; `decls`/`stmts` are
+used by Stage 3 kernel-to-C++ translation, which does. Stage 1 only needs
+`name`/`parameters`/`depends`/`source`. Their expression-tree node shapes
+(`name`, `part_ref`, `funcref`, `triplet`, `binary`, `unary`, `paren`,
+`int_lit`, `real_lit`, `logical_lit`, `char_lit`, `unsupported`) are
+documented in the comment above `emitBodyExpr` in `op2-flang-scan.cpp`.
+`decls` (one entry per `type_decl`/`parameter_stmt`/`data_stmt` in the
+subprogram's specification part) and `stmts` (a fully nested tree of
+`assign`/`call`/`if_stmt`/`if_construct`/`do`/`return`/`stop`/`write`/
+`continue` statements) are documented above `DeclCollector` and
+`BodyStatementEmitter` respectively in `op2-flang-scan.cpp`.
 
 ## Notes / limitations
 
@@ -200,17 +225,33 @@ above `emitBodyExpr` in `op2-flang-scan.cpp`.
   validated this way whenever its kernel and every transitive dependency
   were parsed by Flang (`Function.flang_body` is set on all of them); this is
   checked once per loop by `fortran.flang_validator.can_validate_with_flang`.
+- **Stage 3 (complete with `--parser flang`)**:
+  `fortran/flang_kernels_c.py` ports `fortran/translator/kernels_c.py`
+  (kernel-to-C++ translation: type resolution, parameter const-ness
+  inference, statement/expression codegen) to walk `decls`/`stmts` instead of
+  an fparser2 AST, and `fortran/flang_kernels.py` ports the AST mutations
+  `fortran/schemes.py` applies beforehand (`renameConsts`, `fixHydraIO`,
+  `insertAtomicIncs`; `removeExternals` has no Flang equivalent because
+  `EXTERNAL` statements are never turned into a `decls` node in the first
+  place). Unlike the fparser2 path, `info.consts` is built directly from
+  `Application.consts()` (the already-parsed `op_decl_const` calls) rather
+  than by re-parsing the consts module's declarations - this works
+  identically for both parser backends. This is used by every C++-emitting
+  scheme (`Fortran/c_seq`, `c_cuda`, `c_hip`) whenever every kernel entity
+  involved has `flang_body` set; see
+  `fortran.schemes._use_flang_kernels_c`/`fortran.flang_kernels_c.canTranslateWithFlang`.
+  The Fortran-output `Fortran/cuda` and `Fortran/openmp` schemes are also
+  Flang-native via `fortran/flang_writer.py` (`rename_consts`, `rename_entities`,
+  `fix_hydra_io`, `remove_externals`, `insert_strides`, `insert_atomic_incs`,
+  `write_source`).
 - **fparser2 fallback**: if Flang scan fails for a file, Stage 1 falls back to
   fparser2 for that file. If a loop's dependency closure includes an entity
   without `flang_body` (e.g. it came from an fparser2-fallback file),
-  validation falls back to fparser2 for that loop too, lazily attaching an
-  AST to every Flang-parsed program in the app. Main-program translation
-  (`op_par_loop`/`op_decl_const` call rewriting) is a text-only regex
-  transform (`translateProgram2`) and never needs an AST at all. Kernel
-  translation for schemes other than `Fortran/seq` (`Fortran/cuda`,
-  `c_seq`, `c_cuda`, `c_hip`) still walks an fparser2 AST and prints a
-  one-time warning when run under `--parser flang` - that part of Stage 3
-  hasn't been ported yet.
+  validation and kernel translation fall back to fparser2 for that loop too,
+  lazily attaching an AST to every Flang-parsed program in the app.
+  Main-program translation (`op_par_loop`/`op_decl_const` call rewriting) is
+  a text-only regex transform (`translateProgram2`) and never needs an AST
+  at all.
 - Only the free-form preprocessed output produced by the Python driver is
   supported. Fixed-form sources should be fpp/cpp-preprocessed to free-form
   first (which is what the driver already does).
