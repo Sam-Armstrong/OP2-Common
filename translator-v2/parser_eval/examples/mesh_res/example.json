@@ -1,18 +1,18 @@
 {
-  "name": "stencil1d",
-  "description": "Self-contained 1D Jacobi stencil with a helper-kernel dependency",
+  "name": "mesh_res",
+  "description": "Unstructured edge residual with edge->node and edge->cell maps",
   "workdir": ".",
-  "sources": ["stencil1d.F90"],
+  "sources": ["mesh_res.F90"],
   "translator_flags": [],
   "targets": ["seq", "openmp", "c_cuda"],
-  "app_name": "stencil1d",
+  "app_name": "mesh_res",
   "runtime": {
     "variant": "c_cuda",
-    "make_target": "stencil1d_c_cuda",
-    "binary": "./stencil1d_c_cuda",
+    "make_target": "mesh_res_c_cuda",
+    "binary": "./mesh_res_c_cuda",
     "args": ["OP_PART_SIZE=128", "OP_BLOCK_SIZE=192"],
     "pass_regex": "Test PASSED",
-    "timeout_s": 60,
+    "timeout_s": 90,
     "runtime_ratio_tol": 0.5
   },
   "codegen_timeout_s": 120

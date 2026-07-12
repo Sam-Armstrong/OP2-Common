@@ -1,0 +1,19 @@
+{
+  "name": "tri_diff",
+  "description": "Unstructured triangular mesh cell diffusion (edge->cell maps)",
+  "workdir": ".",
+  "sources": ["tri_diff.F90"],
+  "translator_flags": [],
+  "targets": ["seq", "openmp", "c_cuda"],
+  "app_name": "tri_diff",
+  "runtime": {
+    "variant": "c_cuda",
+    "make_target": "tri_diff_c_cuda",
+    "binary": "./tri_diff_c_cuda",
+    "args": ["OP_PART_SIZE=128", "OP_BLOCK_SIZE=192"],
+    "pass_regex": "Test PASSED",
+    "timeout_s": 90,
+    "runtime_ratio_tol": 0.5
+  },
+  "codegen_timeout_s": 120
+}

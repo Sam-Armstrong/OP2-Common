@@ -15,6 +15,12 @@ parser_eval/
       ...                  # optional app sources / Makefile
 ```
 
+Current examples (all unstructured-mesh style):
+
+- `airfoil` — existing CFD mini-app
+- `tri_diff` — triangular cell mesh, edge→cell diffusion
+- `mesh_res` — edge residual with edge→node and edge→cell maps
+
 ## Adding an example
 
 1. Create `examples/<name>/example.json` (see existing examples).
@@ -25,26 +31,18 @@ parser_eval/
 
 ## Checks performed
 
-For each example, for each configured translation target:
+For each example:
 
 - **Codegen time** — wall time to run the translator with each parser
 - **Dependency trees** — kernel → callee closure from `store.json` (`-d`)
 - **Generated file tree** — same relative paths under the output directory
-- **Generated content** — normalized text equality (ignores content-hash macros
-  and trivial whitespace)
-
-Then, if `runtime` is configured:
-
-- **Build + run** each parser’s generated code
-- **Pass string** must match
-- **Runtime** must be within the configured relative tolerance
+- **Generated content** — normalized C++/CUDA text equality
+- **Build + run** (if configured) — pass string + runtime within tolerance
 
 ## Usage
 
-From the repo root (WSL/Linux):
-
 ```bash
 bash translator-v2/parser_eval/run_eval.sh
-bash translator-v2/parser_eval/run_eval.sh --examples stencil1d
+bash translator-v2/parser_eval/run_eval.sh --examples tri_diff mesh_res
 bash translator-v2/parser_eval/run_eval.sh --skip-runtime
 ```
