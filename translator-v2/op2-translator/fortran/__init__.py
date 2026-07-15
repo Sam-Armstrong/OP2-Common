@@ -176,16 +176,9 @@ class Fortran(Lang):
     user_consts_module = None
     use_regex_translator = False
 
-    # Stage 1 parser backend: "fparser2" (default) or "flang".
-    # With "flang", Stage 1 (loops, consts, kernel entities + source text) is
-    # built from op2-flang-scan JSON. fparser2 is loaded lazily as a fallback
-    # for validation, main-program translation, and non-seq kernel schemes.
     stage1_parser = "fparser2"
     flang_scan_bin = None
 
-    # Populated by parseArgs(); defaults kept here so validate()'s lazy
-    # fparser2 fallback has something sane to use even if parseArgs wasn't
-    # called (e.g. direct API use / tests).
     _include_dirs: Set[Path] = set()
     _defines: List[str] = []
 
@@ -380,11 +373,6 @@ class Fortran(Lang):
         return program
 
     def translateProgram(self, program: Program, include_dirs: Set[Path], defines: List[str], force_soa: bool) -> str:
-        # Main-program translation is a purely textual rewrite (see
-        # translateProgram2's docstring), so a Flang-parsed program never
-        # needs an fparser2 AST here - unlike validation/kernel translation,
-        # there's no AST-walking equivalent to fall back to in the first
-        # place.
         if getattr(program, "stage1_backend", "fparser2") == "flang":
             return fortran.translator.program.translateProgram2(program, force_soa)
 
