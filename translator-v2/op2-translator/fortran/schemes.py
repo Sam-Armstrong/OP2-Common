@@ -17,13 +17,8 @@ from target import Target
 from util import find
 
 
-# -----------------------------------------------------------------------------
-# Helpers for routing kernel translation through the Flang code path.
-# -----------------------------------------------------------------------------
+# Helpers for routing kernel translation through the Flang code path
 
-# Schemes that have already warned the user that they fall back to fparser2
-# under --parser flang. Keyed by scheme name to keep the noise to one line per
-# scheme per translator run.
 _FLANG_FALLBACK_WARNED: set = set()
 
 

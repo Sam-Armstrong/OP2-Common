@@ -33,12 +33,6 @@ def translateProgram2(program: Program, force_soa: bool) -> str:
         const_ptr = m.group(2)
         return f"{m.group(1)}call op_decl_const_{const_ptr.lower()}({const_ptr}, {m.group(3).strip()})"
 
-    # The type argument is a character literal (e.g. "real(8)") that itself
-    # contains parentheses, so the dim argument is matched non-greedily up to
-    # the first comma and the type argument is matched greedily to the LAST
-    # ")" on the line (assumes - like the op_par_loop regex below - that the
-    # call fits on one logical line, true for translator-generated sources).
-
     def repl_loop(m):
         nonlocal kernel_id
 
