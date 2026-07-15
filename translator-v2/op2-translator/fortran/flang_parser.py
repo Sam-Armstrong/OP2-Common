@@ -1,16 +1,4 @@
-"""
-Stage-1 Fortran parser backend driven by LLVM Flang (via the op2-flang-scan
-helper binary).
-
-When the translator runs with ``--parser flang``, this module is the primary
-Stage 1 frontend: it builds ``Program.loops``, ``Program.consts``, and
-``Program.entities`` (with cooked kernel source text on each ``Function``)
-from the JSON emitted by ``op2-flang-scan``. fparser2 is only used as a
-lazy fallback when downstream stages need an AST (validation, CUDA kernel
-rewrites, main-program translation).
-
-The JSON schema is documented in ``translator-v2/flang-scan/README.md``.
-"""
+"""Stage-1 Fortran parser using LLVM Flang via op2-flang-scan."""
 
 from __future__ import annotations
 
@@ -26,17 +14,13 @@ import op as OP
 from store import Application, Function, Location, ParseError, Program
 
 
-# -----------------------------------------------------------------------------
 # Binary discovery
-# -----------------------------------------------------------------------------
 
 DEFAULT_BIN_NAME = "op2-flang-scan"
 
 
 def _repo_build_candidate() -> Optional[Path]:
-    """
-    Return the default build location of op2-flang-scan relative to this file.
-    """
+    """Return the default path for the op2-flang-scan binary."""
     # fortran/flang_parser.py -> op2-translator/fortran/flang_parser.py
     # walk up to translator-v2/flang-scan/build/op2-flang-scan
     here = Path(__file__).resolve()
@@ -46,15 +30,7 @@ def _repo_build_candidate() -> Optional[Path]:
 
 
 def resolve_scan_binary(override: Optional[str] = None) -> Path:
-    """
-    Locate the op2-flang-scan binary.
-
-    Lookup order:
-      1. explicit override (CLI flag)
-      2. OP2_FLANG_SCAN environment variable
-      3. translator-v2/flang-scan/build/op2-flang-scan
-      4. op2-flang-scan on PATH
-    """
+    """Locate the op2-flang-scan binary."""
     if override:
         p = Path(override)
         if not p.is_file():
@@ -82,15 +58,12 @@ def resolve_scan_binary(override: Optional[str] = None) -> Path:
     )
 
 
-# -----------------------------------------------------------------------------
+
 # Tool invocation
-# -----------------------------------------------------------------------------
+
 
 def run_scan(source: str, path: Path, scan_bin: Path) -> Dict[str, Any]:
-    """
-    Run op2-flang-scan on the given (already preprocessed) source text and
-    return the parsed JSON document.
-    """
+    """Run op2-flang-scan and return its JSON output."""
     try:
         proc = subprocess.run(
             [str(scan_bin), "--stdin", "--path", str(path)],
@@ -114,9 +87,7 @@ def run_scan(source: str, path: Path, scan_bin: Path) -> Dict[str, Any]:
         raise ParseError(f"op2-flang-scan produced invalid JSON for {path}: {e}")
 
 
-# -----------------------------------------------------------------------------
 # JSON -> OP objects
-# -----------------------------------------------------------------------------
 
 def _make_loc(path: Path, node_loc: Optional[Dict[str, int]]) -> Location:
     line = 0
@@ -185,28 +156,19 @@ def _arg_as_access_type(arg: Dict[str, Any], loc: Location) -> OP.AccessType:
 from fortran.parser import parseType  # noqa: E402
 
 
-# -----------------------------------------------------------------------------
 # Event dispatch
-# -----------------------------------------------------------------------------
 
 _PAR_LOOP_RE = re.compile(r"^op_par_loop_\d+$")
 _SUBPROGRAM_KINDS = ("subroutine_subprogram", "function_subprogram")
 
 
 def app_has_flang_stage1(app: Application) -> bool:
-    """Return True if any program in the application was parsed with Flang."""
+    """Return True if any program was parsed with Flang."""
     return any(getattr(p, "stage1_backend", "fparser2") == "flang" for p in app.programs)
 
 
 def build_program_from_flang(path: Path, source: str, data: Dict[str, Any]) -> Program:
-    """
-    Build a complete Stage 1 ``Program`` from op2-flang-scan JSON.
-
-    Populates loops, consts, and Function entities (each with ``flang_source``,
-    parameters, and raw dependency names). Cross-file dependency filtering is
-    deferred to ``resolve_flang_dependencies`` once every translation unit has
-    been loaded into the ``Application``.
-    """
+    """Build a Stage 1 Program from op2-flang-scan JSON."""
     program = Program(path, None, source)
     setattr(program, "stage1_backend", "flang")
 
@@ -233,12 +195,7 @@ def build_program_from_flang(path: Path, source: str, data: Dict[str, Any]) -> P
 
 
 def populate_program(program: Program, data: Dict[str, Any]) -> None:
-    """
-    Overlay Flang-derived Stage 1 data onto an existing fparser2-built program.
-
-    Kept for compatibility with the hybrid overlay path when both parsers run;
-    prefer ``build_program_from_flang`` for the primary ``--parser flang`` path.
-    """
+    """Overlay Flang Stage 1 data onto an existing Program."""
     built = build_program_from_flang(program.path, program.source, data)
     program.loops = built.loops
     program.consts = built.consts
@@ -285,7 +242,7 @@ def _function_from_subprogram_event(event: Dict[str, Any], program: Program) -> 
 
 
 def _merge_flang_entities(program: Program, flang_entities: List[Function]) -> None:
-    """Attach ``flang_source`` / depends from Flang entities onto fparser2 ones."""
+    """Merge Flang entity metadata onto fparser2 entities."""
     by_name = {entity.name.lower(): entity for entity in flang_entities}
 
     for entity in program.entities:
@@ -306,15 +263,7 @@ def _merge_flang_entities(program: Program, flang_entities: List[Function]) -> N
 
 
 def resolve_flang_dependencies(app: Application) -> None:
-    """
-    Filter each entity's ``depends`` set to names that refer to known subprograms
-    in the application.
-
-    This is the Flang equivalent of ``fortran.parser.parseFunctionDependencies``:
-    the C++ scanner records every callee / function-reference name (including
-    intrinsics and parameter names); we keep only edges that resolve to a
-    ``Function`` entity somewhere in the app.
-    """
+    """Keep only depends that resolve to known Function entities."""
     known_names: Set[str] = set()
     for program in app.programs:
         for entity in program.entities:

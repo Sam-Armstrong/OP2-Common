@@ -1,38 +1,4 @@
-"""
-Text-level kernel rewriting for the --parser flang code path.
-
-When Stage 1 runs through LLVM Flang via op2-flang-scan, each `Function`
-entity gets a `flang_source` attribute holding the cooked Fortran text of
-that subprogram. The helpers in this module are the Flang-driven analogues
-of the fparser2-based rewriters in `fortran.translator.kernels`:
-
-    fparser2 helper                         flang_writer equivalent
-    ------------------------------------    ------------------------------
-    ftk.writeSource(entities, prologue)     write_source
-    ftk.renameConsts(lang, entities, ...)   rename_consts
-    ftk.renameEntities(entities, replace)   rename_entities
-    ftk.fixHydraIO(entity)                  fix_hydra_io
-    ftk.removeExternals(entity)             remove_externals
-    ftk.insertStrides(...)                  insert_strides
-    ftk.insertAtomicIncs(..., c_api=False)  insert_atomic_incs
-
-`extract_dependencies` is intentionally not re-implemented here: the
-fparser2 helper only consults `entity.depends` and `app.findEntities`,
-both of which work identically once `flang_parser.populate_program` has
-attached Flang-derived depends to the entities.
-
-These rewriters operate on the cooked Fortran text emitted by Flang's
-prescanner (lowercase keywords, comments stripped, continuations
-unified), which is what op2-flang-scan dumps in the `source` field of
-each subprogram event. We avoid touching characters inside string
-literals with a small helper.
-
-``insert_strides`` / ``insert_atomic_incs`` are what the Fortran-output
-``cuda`` scheme needs beyond the ``seq`` path: they rewrite ``flang_source``
-in place (using ``flang_body`` decls for array shapes and
-``flang_validator.map_param`` for transitive parameter flow). The C++-output
-schemes use ``fortran.flang_kernels`` JSON mutations instead.
-"""
+"""Text-level kernel rewriting for the Flang parser path."""
 
 from __future__ import annotations
 
@@ -46,16 +12,10 @@ from op import OpError
 from store import Application, Entity, Function
 
 
-# -----------------------------------------------------------------------------
 # String-literal-aware replacement
-# -----------------------------------------------------------------------------
 
 def _substitute_outside_strings(source: str, replace_chunk: Callable[[str], str]) -> str:
-    """
-    Apply `replace_chunk` to every contiguous span of `source` that does not
-    fall inside a Fortran character literal. Doubled-quote escapes inside
-    literals (``'it''s'``, ``"a""b"``) are handled.
-    """
+    """Apply a replacement outside Fortran character literals."""
     out: List[str] = []
     i = 0
     n = len(source)
@@ -85,16 +45,10 @@ def _substitute_outside_strings(source: str, replace_chunk: Callable[[str], str]
     return "".join(out)
 
 
-# -----------------------------------------------------------------------------
 # Entity helpers
-# -----------------------------------------------------------------------------
 
 def _flang_functions(entities: Iterable[Entity]) -> List[Function]:
-    """
-    Return only those entities that are Functions with a Flang source text
-    attached. Anything without flang_source is skipped silently - it's the
-    caller's job to make sure they're operating in the Flang code path.
-    """
+    """Return Functions that have Flang source text attached."""
     out: List[Function] = []
     for e in entities:
         if isinstance(e, Function) and getattr(e, "flang_source", None):
@@ -102,9 +56,7 @@ def _flang_functions(entities: Iterable[Entity]) -> List[Function]:
     return out
 
 
-# -----------------------------------------------------------------------------
 # Mutations
-# -----------------------------------------------------------------------------
 
 def rename_consts(
     lang: Lang,
@@ -112,14 +64,7 @@ def rename_consts(
     app: Application,
     replacement: Callable[[str], str],
 ) -> None:
-    """
-    Rename references to OP2 declared consts inside each entity's flang_source.
-
-    Mirrors fparser2's `renameConsts`: an identifier is renamed if it matches
-    a known const pointer *and* is not one of the kernel parameters of the
-    enclosing subprogram. The replacement is performed with word boundaries
-    and skips occurrences inside string literals.
-    """
+    """Rename OP2 const references in each entity's flang_source."""
     const_ptrs = app.constPtrs()
 
     for entity in _flang_functions(entities):
@@ -139,10 +84,7 @@ def rename_consts(
 
 
 def rename_function_definition(entity: Function, replacement: str) -> None:
-    """
-    Rename the subroutine/function header (and its matching ``end`` statement
-    if the name was repeated) within `entity.flang_source`.
-    """
+    """Rename a subroutine/function header and matching end statement."""
     if not getattr(entity, "flang_source", None):
         return
 
@@ -168,12 +110,7 @@ def rename_function_definition(entity: Function, replacement: str) -> None:
 
 
 def rename_function_calls(entity: Function, name: str, replacement: str) -> None:
-    """
-    Rewrite ``call <name>(...)`` and function-style references ``<name>(...)``
-    inside the entity body. The function-style match is conservative: we only
-    rename occurrences that are followed by ``(``, to avoid mangling
-    declaration types that happen to share a name.
-    """
+    """Rename call and function-style references to a subprogram."""
     if not getattr(entity, "flang_source", None):
         return
 
@@ -198,14 +135,7 @@ def rename_function_calls(entity: Function, name: str, replacement: str) -> None
 
 
 def rename_entities(entities: Sequence[Entity], replacement: Callable[[str], str]) -> None:
-    """
-    Rename a group of subprograms in lockstep, updating both the definitions
-    and any call sites among the same group. Mirrors fparser2's
-    `renameEntities`, which is used by the FortranOpenMP SIMD code path.
-
-    We do the rewrites in two passes so the old name is still available when
-    we rewrite call sites between the entities in the group.
-    """
+    """Rename a group of subprograms and their call sites."""
     funcs = _flang_functions(entities)
     rename_plan = [(f, f.name, replacement(f.name)) for f in funcs]
 
@@ -219,9 +149,7 @@ def rename_entities(entities: Sequence[Entity], replacement: Callable[[str], str
         rename_function_definition(func, new_name)
 
 
-# -----------------------------------------------------------------------------
 # Cleanup helpers
-# -----------------------------------------------------------------------------
 
 _EXTERNAL_LINE_RE = re.compile(r"^\s*external\s*(?:::)?\s*[^\n]*\n?", flags=re.IGNORECASE | re.MULTILINE)
 _WRITE_STMT_RE = re.compile(r"^\s*write\s*\([^\n]*\)[^\n]*\n?", flags=re.IGNORECASE | re.MULTILINE)
@@ -239,9 +167,7 @@ _HYDRA_CALL_RE = re.compile(
 
 
 def remove_externals(entity: Function) -> None:
-    """
-    Strip ``external`` declarations from `entity.flang_source`.
-    """
+    """Strip external declarations from flang_source."""
     if not getattr(entity, "flang_source", None):
         return
 
@@ -252,10 +178,7 @@ def remove_externals(entity: Function) -> None:
 
 
 def fix_hydra_io(entity: Function) -> None:
-    """
-    Replace ``write(...)`` statements with ``continue`` and certain hydra
-    helper calls with ``stop``, matching the fparser2 path.
-    """
+    """Replace write statements and hydra helper calls in flang_source."""
     if not getattr(entity, "flang_source", None):
         return
 
@@ -267,12 +190,10 @@ def fix_hydra_io(entity: Function) -> None:
     entity.flang_source = _substitute_outside_strings(entity.flang_source, sub_chunk)
 
 
-# -----------------------------------------------------------------------------
 # insert_strides / insert_atomic_incs (Fortran CUDA scheme)
-# -----------------------------------------------------------------------------
 
 def _expr_to_fortran(expr: Optional[Dict[str, Any]]) -> str:
-    """Minimal JSON-expr -> Fortran text for bound expressions in decls."""
+    """Convert a JSON expression node to Fortran text."""
     if expr is None:
         return "1"
 
@@ -303,11 +224,7 @@ def _expr_to_fortran(expr: Optional[Dict[str, Any]]) -> str:
 
 
 def _param_dims(entity: Function, param: str) -> Optional[List[Tuple[str, Optional[str]]]]:
-    """
-    Return explicit shape bounds for `param` from ``flang_body["decls"]``, or
-    None if the parameter has no array shape (treated as a 1-D assumed-size
-    reference by insertStride).
-    """
+    """Return explicit shape bounds for a parameter from flang_body decls."""
     body = getattr(entity, "flang_body", None)
     if body is None:
         return None
@@ -364,10 +281,7 @@ def _find_balanced_paren(source: str, open_idx: int) -> int:
 
 
 def _iter_param_indexings(source: str, param: str) -> List[Tuple[int, int, str]]:
-    """
-    Return (start, end, subscript_text) for every ``param(...)`` occurrence
-    outside string literals. ``end`` is exclusive.
-    """
+    """Find param(...) occurrences outside string literals."""
     hits: List[Tuple[int, int, str]] = []
     pattern = re.compile(rf"\b{re.escape(param)}\s*\(", flags=re.IGNORECASE)
 
@@ -431,11 +345,7 @@ def _flatten_index(subscript_text: str, dims: List[Tuple[str, Optional[str]]]) -
 
 
 def _erase_param_dimensions(source: str, param: str) -> str:
-    """
-    Mirror ``eraseDimensions``: collapse the parameter's explicit shape to
-    assumed-size ``*`` in both ``dimension(...)`` attributes and entity-level
-    ``name(bounds)`` forms.
-    """
+    """Collapse a parameter's explicit shape to assumed-size *."""
     lines = source.splitlines(keepends=True)
     out: List[str] = []
     entity_shape_re = re.compile(
@@ -491,7 +401,7 @@ def insert_strides(
     match: Callable[[Any], bool] = lambda arg: True,
     modified: Optional[Dict[str, Set[int]]] = None,
 ) -> Dict[str, Set[int]]:
-    """Flang/text equivalent of ``fortran.translator.kernels.insertStrides``."""
+    """Insert SIMD strides into Flang kernel source text."""
     if modified is None:
         modified = {}
 
@@ -536,10 +446,7 @@ def _zero_literal_fortran(typ: OP.Type) -> str:
 
 
 def _replace_fortran_increments(source: str, param: str, typ: OP.Type) -> Tuple[str, bool]:
-    """
-    Rewrite ``lhs = lhs +/- expr`` lines into ``op2_ret = atomicAdd(lhs, amount)``
-    where amount is rhs with each whole occurrence of lhs replaced by zero.
-    """
+    """Rewrite increment assignments to atomicAdd calls."""
     lines = source.splitlines(keepends=True)
     changed = False
     out: List[str] = []
@@ -630,11 +537,7 @@ def insert_atomic_incs(
     loop: OP.Loop,
     match: Callable[[Any], bool],
 ) -> None:
-    """
-    Flang/text equivalent of ``insertAtomicIncs(..., c_api=False)`` used by
-    ``FortranCuda``: rewrite increments to ``op2_ret = atomicAdd(...)`` and
-    declare ``integer(4) :: op2_ret``.
-    """
+    """Rewrite increments to atomicAdd in Flang kernel source text."""
     if not entities:
         return
 
@@ -677,22 +580,10 @@ def insert_atomic_incs(
             entity.flang_source = _ensure_op2_ret_decl(entity.flang_source)
 
 
-# -----------------------------------------------------------------------------
 # Source emission
-# -----------------------------------------------------------------------------
 
 def write_source(entities: Sequence[Entity], prologue: Optional[str] = None) -> str:
-    """
-    Emit the Flang-derived source text for the given entities, concatenated in
-    the same order that `fortran.translator.kernels.writeSource` uses
-    (innermost dependencies last). The optional `prologue` is prepended to
-    each entity, matching the fparser2 helper's API.
-
-    Long lines (> 264 chars) are wrapped with Fortran continuations via the
-    shared helper so downstream compilers don't reject them - the Flang
-    prescanner unifies continuations on input which can produce very long
-    cooked lines.
-    """
+    """Emit Flang-derived source text for the given entities."""
     # Late import to avoid a circular dependency between flang_writer and
     # fortran.translator.kernels.
     from fortran.translator.kernels import addLineContinuations

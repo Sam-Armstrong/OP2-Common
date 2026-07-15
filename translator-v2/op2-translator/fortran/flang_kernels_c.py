@@ -1,25 +1,4 @@
-"""
-Flang/JSON port of ``fortran.translator.kernels_c`` (Stage 3: translating a
-Fortran kernel subroutine/function to C++), operating on the ``decls``/
-``stmts`` JSON produced by ``op2-flang-scan`` (see the "Declaration
-serialization" / "Statement-tree serialization" sections of
-translator-v2/flang-scan/op2-flang-scan.cpp) instead of an fparser2 AST.
-
-The FType/FPrimitive/FInteger/FReal/FLogical/FCharacter/FArray/Param type
-hierarchy is reused as-is from fortran.translator.kernels_c: it only encodes
-C++ codegen concerns (never touches fparser2 nodes directly), so there was
-nothing Flang-specific to port there.
-
-One deliberate behavioural difference from kernels_c.py: `info.consts` is
-built directly from `Application.consts()` (the already-parsed `op_decl_const`
-call info) rather than by walking the consts module's full declaration list.
-This works for *both* parser backends, and is actually more robust: Stage 1's
-`parseType` (fortran/parser.py) never returns a character type for an
-op_decl_const call, so the fparser2 path's dead
-`isinstance(type_, FCharacter): loop.consts.discard(name)` branch never
-actually fires in practice, and any *other* module-level declaration (not
-registered via op_decl_const) was never a legitimate substitute for it either.
-"""
+"""Translate Flang kernel decls/stmts JSON to C++."""
 
 from __future__ import annotations
 
@@ -44,9 +23,9 @@ from op import OpError
 from store import Application, Function
 from util import safeFind
 
-# -----------------------------------------------------------------------------
+
 # Info / Context
-# -----------------------------------------------------------------------------
+
 
 
 @dataclass
@@ -113,9 +92,7 @@ def canTranslateWithFlang(entities: List[Function]) -> bool:
     return all(getattr(e, "flang_body", None) is not None for e in entities)
 
 
-# -----------------------------------------------------------------------------
 # parseInfo
-# -----------------------------------------------------------------------------
 
 
 def parseInfo(
@@ -297,9 +274,9 @@ def resolveOpArgs(entities: List[Function], info: Info, loop: OP.Loop) -> None:
         map_param(entities[0], i, entities, setOpArg, info, loop.args[i])
 
 
-# -----------------------------------------------------------------------------
+
 # resolveParamAccesses
-# -----------------------------------------------------------------------------
+
 
 
 def _exprBaseName(expr: Dict[str, Any]) -> Optional[str]:
@@ -332,13 +309,7 @@ def _collectDoVars(stmts: List[Dict[str, Any]]) -> Set[str]:
 
 
 def _findCallsForParamWithAtomic(body: Dict[str, Any], param: str, known_names: Set[str]) -> List[Tuple[str, int]]:
-    """
-    Like fortran.flang_validator._find_calls_for_param, but also recognizes
-    "atomicadd" as a valid call target even though it is never a known
-    subprogram - mirroring kernels_c.py's local `getCall`'s special case
-    (`if func_name != "atomicAdd" and sub_info is None: return None`), which
-    resolveParamAccessesLocal relies on to mark an INC param as non-const.
-    """
+    """Like _find_calls_for_param, but also accepts atomicAdd as a callee."""
     results: List[Tuple[str, int]] = []
 
     def record(name: Optional[str], idx: int) -> None:
@@ -477,9 +448,9 @@ def tryResolveParams(ctx: Context) -> bool:
     return has_unresolved
 
 
-# -----------------------------------------------------------------------------
+
 # translate
-# -----------------------------------------------------------------------------
+
 
 
 def translate(info: Info) -> str:
@@ -712,9 +683,9 @@ def translateDoConstruct(do_stmt: Dict[str, Any], ctx: Context) -> str:
     return f"{header} {{\n{indent(body)}\n}}\n"
 
 
-# -----------------------------------------------------------------------------
+
 # Names
-# -----------------------------------------------------------------------------
+
 
 _RENAME = {
     "atomicadd": "atomicAdd",
@@ -753,9 +724,9 @@ def translateName(raw_name: str, ctx: Optional[Context] = None) -> str:
     return raw
 
 
-# -----------------------------------------------------------------------------
+
 # Expressions
-# -----------------------------------------------------------------------------
+
 
 INTRINSIC_FUNCS = {
     "abs": "f2c::abs",
