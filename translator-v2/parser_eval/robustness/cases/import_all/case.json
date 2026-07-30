@@ -1,0 +1,14 @@
+{
+  "name": "import_all",
+  "category": "syntax_gap",
+  "description": "F2018 IMPORT, ALL",
+  "fparser2_reason": "fparser2 0.2.0 does not parse IMPORT, ALL (Fortran 2018)",
+  "sources": [
+    "import_all.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}

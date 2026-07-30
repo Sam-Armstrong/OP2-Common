@@ -1,0 +1,14 @@
+{
+  "name": "do_concurrent_local",
+  "category": "syntax_gap",
+  "description": "F2018 DO CONCURRENT with LOCAL locality specifier",
+  "fparser2_reason": "fparser2 0.2.0 has no F2018 concurrent-locality LOCAL; see stfc/fparser#409",
+  "sources": [
+    "do_concurrent_local.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "sync_memory",
+  "category": "syntax_gap",
+  "description": "F2008/2018 SYNC MEMORY statement",
+  "fparser2_reason": "fparser2 0.2.0 does not parse SYNC MEMORY",
+  "sources": [
+    "sync_memory.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}

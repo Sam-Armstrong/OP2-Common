@@ -1,0 +1,14 @@
+{
+  "name": "procedure_pointer_init",
+  "category": "negative_control",
+  "description": "F2008 procedure-pointer initial-proc-target (both parsers reject on this toolchain)",
+  "notes": "Documents a Flang-scan / fparser 0.2.0 gap: procedure(cb), pointer :: p => target",
+  "sources": [
+    "procedure_pointer_init.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "fail"
+}

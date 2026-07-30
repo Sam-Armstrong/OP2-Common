@@ -1,0 +1,14 @@
+{
+  "name": "import_only",
+  "category": "syntax_gap",
+  "description": "F2018 IMPORT, ONLY",
+  "fparser2_reason": "fparser2 0.2.0 does not parse IMPORT, ONLY (Fortran 2018)",
+  "sources": [
+    "import_only.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}

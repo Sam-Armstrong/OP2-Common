@@ -1,0 +1,14 @@
+{
+  "name": "enumeration_type",
+  "category": "negative_control",
+  "description": "F2023 ENUMERATION TYPE (both parsers reject on this toolchain)",
+  "notes": "Documents a Flang-scan / fparser gap for Fortran 2023 enumerations",
+  "sources": [
+    "enumeration_type.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "fail"
+}

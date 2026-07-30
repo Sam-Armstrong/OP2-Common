@@ -1,0 +1,16 @@
+{
+  "name": "valid_runtime_local",
+  "category": "pipeline",
+  "description": "Validation: runtime-dimension local array in kernel",
+  "sources": [
+    "valid_runtime_local.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "pass_with_warning",
+  "expect_flang": "pass_with_warning",
+  "expected_warnings": [
+    "runtime dimension local arrays"
+  ]
+}

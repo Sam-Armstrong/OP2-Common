@@ -1,0 +1,17 @@
+{
+  "name": "valid_child_read_write",
+  "category": "pipeline",
+  "description": "Validation: OP_READ write via child subroutine",
+  "notes": "Checks map_param / find_called propagation on Flang and fparser2 paths",
+  "sources": [
+    "valid_child_read_write.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "pass_with_warning",
+  "expect_flang": "pass_with_warning",
+  "expected_warnings": [
+    "marked OP_READ but was written"
+  ]
+}

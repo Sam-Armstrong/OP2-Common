@@ -1,0 +1,14 @@
+{
+  "name": "macro_op_loop",
+  "category": "pipeline",
+  "description": "Preprocessor macro expanding to op_par_loop_2",
+  "notes": "op2-flang-scan sees post-preprocess text; macro must expand before Stage 1",
+  "sources": [
+    "macro_op_loop.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

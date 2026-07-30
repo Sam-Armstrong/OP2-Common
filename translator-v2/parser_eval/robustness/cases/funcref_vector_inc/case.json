@@ -1,0 +1,14 @@
+{
+  "name": "funcref_vector_inc",
+  "category": "pipeline",
+  "description": "Vector OP_INC via u(i)=u(i)+... (Flang often emits funcref)",
+  "notes": "Stresses arr(i)/funcref name-matching in flang_validator and codegen",
+  "sources": [
+    "funcref_vector_inc.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

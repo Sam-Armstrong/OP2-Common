@@ -49,9 +49,11 @@ bash translator-v2/parser_eval/run_eval.sh --skip-runtime
 
 ## Robustness suite
 
-Constructs that fparser2 cannot parse (Flang comparison) live under
+Syntax-gap, negative-control, and OP2-pipeline stress cases live under
 [`robustness/`](robustness/):
 
 ```bash
 bash translator-v2/parser_eval/robustness/run_robustness.sh
+bash translator-v2/parser_eval/robustness/run_robustness.sh --categories pipeline
 ```
+

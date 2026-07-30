@@ -1,0 +1,14 @@
+{
+  "name": "form_team",
+  "category": "syntax_gap",
+  "description": "F2018 FORM TEAM / CHANGE TEAM / END TEAM",
+  "fparser2_reason": "fparser2 0.2.0 does not parse FORM TEAM / CHANGE TEAM",
+  "sources": [
+    "form_team.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}
