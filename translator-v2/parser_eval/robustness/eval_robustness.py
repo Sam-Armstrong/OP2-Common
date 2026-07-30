@@ -327,7 +327,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--categories",
         nargs="+",
-        help="subset of categories (syntax_gap, negative_control, pipeline)",
+        help="subset of categories (syntax_gap, negative_control, pipeline, flang_gap)",
     )
     ap.add_argument("--keep-work", type=Path, help="keep translator outputs")
     args = ap.parse_args(argv)

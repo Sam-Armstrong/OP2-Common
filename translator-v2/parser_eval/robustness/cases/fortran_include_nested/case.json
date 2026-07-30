@@ -1,0 +1,10 @@
+{
+  "name": "fortran_include_nested",
+  "category": "flang_gap",
+  "description": "Nested Fortran INCLUDE of the op_par_loop site (fparser2 pass, Flang Stage-1 fallback)",
+  "notes": "outer.inc includes loop_site.inc; Flang still fails INCLUDE resolution from the scan temp path",
+  "sources": ["fortran_include_nested.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "fallback"
+}

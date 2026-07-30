@@ -10,6 +10,7 @@ Minimal OP2 apps that assess Flang Stage-1 robustness relative to fparser2
 | `syntax_gap` | Fortran constructs fparser2 cannot parse; Flang should translate |
 | `negative_control` | Constructs neither parser handles on this toolchain |
 | `pipeline` | OP2 Flang-path stress (validation, multi-file, macros, funcref, fallback) |
+| `flang_gap` | fparser2 translates natively; Flang Stage 1 fails or falls back |
 
 ## Layout
 
@@ -40,3 +41,70 @@ bash translator-v2/parser_eval/robustness/run_robustness.sh --categories pipelin
 bash translator-v2/parser_eval/robustness/run_robustness.sh --cases assumed_rank valid_const_write
 bash translator-v2/parser_eval/robustness/run_robustness.sh --keep-work /tmp/op2_robust
 ```
+
+
+## Notes
+
+Results below are against **fparser 0.2.0** (`std=f2008`) and the built
+`op2-flang-scan`. Re-run the suite after upgrading either side.
+
+### `syntax_gap` — fparser2 fails, Flang passes
+
+fparser2 only claims Fortran 2003 plus some 2008. These cases use F2018/F2023
+(or incomplete F2008) syntax that its grammar rejects at Stage 1, while Flang
+parses them and the OP2 Flang path translates without falling back:
+
+- **DO CONCURRENT locality** — `SHARED` / `LOCAL` / `REDUCE` / `DEFAULT(NONE)`
+  (stfc/fparser#409)
+- **Assumed-rank / SELECT RANK** — `x(..)`, `SELECT RANK`
+- **Assumed-type** — `TYPE(*)`
+- **IMPORT forms** — `IMPORT, NONE` / `ONLY` / `ALL`
+- **IMPLICIT NONE (TYPE, EXTERNAL)**
+- **ERROR STOP …, QUIET=**, **FAIL IMAGE**, **SYNC MEMORY**, **FORM/CHANGE TEAM**
+- **Submodule `MODULE PROCEDURE` bodies** (this fparser pin)
+- **F2023** — conditional expressions `(cond ? x : y)`, `UNSIGNED`
+- **`syntax_in_kernel`** — same idea, but the modern construct sits inside the
+  OP2 kernel (not only host init)
+
+### `negative_control` — both fail
+
+Documents limits of *this* toolchain, not OP2 logic:
+
+- **`procedure_pointer_init`** — `procedure(...), pointer :: p => target`
+- **`enumeration_type`** — F2023 `ENUMERATION TYPE`
+
+Both reject at parse (Flang Stage 1 fails, then fparser2 fallback also fails).
+
+### `pipeline` — both expected to succeed (OP2-path stress)
+
+These are valid OP2 mini-apps both parsers should handle. They check that the
+Flang path stays native and still performs the same work as fparser2:
+
+- **Multi-file / preprocess** — `multi_file_app`, `#define` → `op_par_loop`
+  (`macro_op_loop`), `#include` of a loop site (`include_loop_site`)
+- **funcref / `arr(i)`** — vector `OP_INC` via `u(i)=u(i)+…`
+  (`funcref_vector_inc`); Flang-scan often emits `funcref`, resolved by name
+  in `flang_validator` / codegen
+- **Validation warnings** (`pass_with_warning` on both) — const write,
+  `OP_READ` write, bad `OP_INC`, runtime-sized locals, write via child
+  subroutine; translation still exits 0 with `loop.fallback` where applicable
+- **`stage1_scan_fallback`** — intentional broken `--flang-scan` stub: Flang
+  Stage 1 must fall back, then fparser2 finishes the ordinary source
+
+Contrast: C preprocessor `#include` works for Flang (expanded before scan);
+Fortran `INCLUDE` does not (see `flang_gap`).
+
+### `flang_gap` — fparser2 passes, Flang falls back
+
+The only natural inverse gap found in probing. Fortran `INCLUDE` is left in
+the source after fpp/pcpp. fparser2 resolves it via `include_dirs` / cwd.
+`op2-flang-scan` feeds source on stdin into a temp file under `/tmp`, so Flang
+reports `INCLUDE: Source file '…' was not found`, Stage 1 falls back to
+fparser2, and translation still succeeds:
+
+- `fortran_include_loop` — include of the `op_par_loop` site
+- `fortran_include_host` — include of host-only init
+- `fortran_include_nested` — nested includes
+
+No cases were found where fparser2 translated and Flang failed *hard* without
+a successful fparser2 fallback (for `seq` / `c_seq` mini-apps probed).
