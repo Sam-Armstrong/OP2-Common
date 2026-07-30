@@ -1,0 +1,7 @@
+{
+  "name": "conditional_expr",
+  "description": "F2023 conditional expression (cond ? x : y)",
+  "fparser2_reason": "fparser2 0.2.0 (std=f2008) has no support for Fortran 2023 conditional expressions",
+  "sources": ["conditional_expr.F90"],
+  "targets": ["seq"]
+}

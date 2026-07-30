@@ -1,0 +1,7 @@
+{
+  "name": "select_rank",
+  "description": "F2018 SELECT RANK on an assumed-rank argument",
+  "fparser2_reason": "fparser2 0.2.0 (std=f2008) does not parse assumed-rank (..) or SELECT RANK (Fortran 2018)",
+  "sources": ["select_rank.F90"],
+  "targets": ["seq"]
+}

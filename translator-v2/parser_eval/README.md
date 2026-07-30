@@ -46,3 +46,12 @@ bash translator-v2/parser_eval/run_eval.sh
 bash translator-v2/parser_eval/run_eval.sh --examples tri_diff mesh_res
 bash translator-v2/parser_eval/run_eval.sh --skip-runtime
 ```
+
+## Robustness suite
+
+Constructs that fparser2 cannot parse (Flang comparison) live under
+[`robustness/`](robustness/):
+
+```bash
+bash translator-v2/parser_eval/robustness/run_robustness.sh
+```

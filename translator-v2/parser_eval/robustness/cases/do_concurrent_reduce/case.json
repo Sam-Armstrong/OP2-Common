@@ -1,0 +1,7 @@
+{
+  "name": "do_concurrent_reduce",
+  "description": "F2018 DO CONCURRENT with REDUCE locality specifier",
+  "fparser2_reason": "fparser2 0.2.0 (std=f2008) has no support for F2018 concurrent-locality REDUCE; see stfc/fparser#409",
+  "sources": ["do_concurrent_reduce.F90"],
+  "targets": ["seq"]
+}
