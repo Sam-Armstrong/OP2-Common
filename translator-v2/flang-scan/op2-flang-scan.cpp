@@ -60,7 +60,7 @@
 //
 // CLI
 // ---
-//   op2-flang-scan [--stdin] [--path <reported-path>] [-I <dir>]... [path]
+//   op2-flang-scan [--stdin] [--timing] [--path <reported-path>] [-I <dir>]... [path]
 //
 // When --stdin is given (or no path argument is supplied), the source is
 // slurped from stdin into a temp file and that temp file is fed to Flang.
@@ -92,6 +92,7 @@
 // tree variant tags (variant), and the OS shims for reading stdin / picking
 // a temp path.
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -2329,6 +2330,12 @@ static std::string writeTempFile(const std::string &contents,
     std::exit(1);
 }
 
+using Clock = std::chrono::steady_clock;
+
+static double msSince(Clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
+
 // Parent directory of `path`, or empty if there isn't one.
 static std::string parentDirOf(const std::string &path) {
     namespace fs = std::filesystem;
@@ -2370,6 +2377,7 @@ int main(int argc, char **argv) {
     // anything else is taken as the input path.
     std::string path;
     bool readStdin = false;
+    bool emitTiming = false;
     std::string originalPath; // reported in JSON "path" field
     std::vector<std::string> includeDirs;
 
@@ -2377,6 +2385,8 @@ int main(int argc, char **argv) {
         std::string a = argv[i];
         if (a == "--stdin") {
             readStdin = true;
+        } else if (a == "--timing") {
+            emitTiming = true;
         } else if (a == "--path" && i + 1 < argc) {
             originalPath = argv[++i];
         } else if (a == "-I" && i + 1 < argc) {
@@ -2392,6 +2402,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    const auto tMain = Clock::now();
+
     // -- 2. Materialise stdin to a temp file if needed ------------------------
     //
     // Prefer the directory of --path so Flang's INCLUDE search (directory of
@@ -2400,10 +2412,13 @@ int main(int argc, char **argv) {
     // defence when the temp file has to live under /tmp instead.
     std::string tempFile;
     std::string sourceDir = parentDirOf(originalPath.empty() ? path : originalPath);
+    double materializeMs = 0.0;
     if (readStdin || path.empty()) {
+        const auto t0 = Clock::now();
         std::string body = slurpStdin();
         tempFile = writeTempFile(body, sourceDir);
         path = tempFile;
+        materializeMs = msSince(t0);
     }
     if (originalPath.empty()) originalPath = path;
     if (sourceDir.empty()) {
@@ -2437,8 +2452,10 @@ int main(int argc, char **argv) {
     fp::AllCookedSources cooked{allSources};
     fp::Parsing parsing{cooked};
 
+    const auto tParse0 = Clock::now();
     parsing.Prescan(path, options);
     parsing.Parse(llvm::errs());
+    const double parseMs = msSince(tParse0);
 
     // -- 4. Surface parse errors ----------------------------------------------
     if (!parsing.messages().empty() && parsing.messages().AnyFatalError()) {
@@ -2456,6 +2473,7 @@ int main(int argc, char **argv) {
     const fp::Program &program = *parsing.parseTree();
 
     // -- 5. Walk the parse tree, building the JSON document -------------------
+    const auto tEmit0 = Clock::now();
     Json json;
     json.beginObject();
     json.key("path"); json.stringValue(originalPath);
@@ -2467,10 +2485,27 @@ int main(int argc, char **argv) {
     json.endArray();
 
     json.endObject();
+    const std::string jsonOut = json.str();
+    const double walkEmitMs = msSince(tEmit0);
 
     // -- 6. Emit and clean up -------------------------------------------------
-    std::cout << json.str() << "\n";
+    const auto tWrite0 = Clock::now();
+    std::cout << jsonOut << "\n";
+    std::cout.flush();
+    const double stdoutWriteMs = msSince(tWrite0);
 
     if (!tempFile.empty()) std::remove(tempFile.c_str());
+
+    if (emitTiming) {
+        // machine-readable one-liner for the Python measurement harness
+        std::cerr << "OP2_FLANG_SCAN_TIMING"
+                  << " materialize_ms=" << materializeMs
+                  << " parse_ms=" << parseMs
+                  << " walk_emit_ms=" << walkEmitMs
+                  << " stdout_write_ms=" << stdoutWriteMs
+                  << " total_ms=" << msSince(tMain)
+                  << " json_bytes=" << jsonOut.size()
+                  << "\n";
+    }
     return 0;
 }
