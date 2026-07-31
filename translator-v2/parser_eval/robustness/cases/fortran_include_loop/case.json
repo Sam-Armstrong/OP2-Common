@@ -1,10 +1,10 @@
 {
   "name": "fortran_include_loop",
   "category": "flang_gap",
-  "description": "Fortran INCLUDE of the op_par_loop call site (fparser2 pass, Flang Stage-1 fallback)",
-  "notes": "op2-flang-scan stdin temp file cannot resolve INCLUDE; fparser2 FortranStringReader uses include_dirs",
+  "description": "Fortran INCLUDE of the op_par_loop call site",
+  "notes": "Flang resolves INCLUDE via --path directory / -I (same as fparser2 include_dirs)",
   "sources": ["fortran_include_loop.F90"],
   "targets": ["seq"],
   "expect_fparser2": "pass",
-  "expect_flang": "fallback"
+  "expect_flang": "pass"
 }

@@ -60,13 +60,16 @@
 //
 // CLI
 // ---
-//   op2-flang-scan [--stdin] [--path <reported-path>] [path]
+//   op2-flang-scan [--stdin] [--path <reported-path>] [-I <dir>]... [path]
 //
 // When --stdin is given (or no path argument is supplied), the source is
 // slurped from stdin into a temp file and that temp file is fed to Flang.
 // The --path option overrides the path that we report in the JSON output
 // (handy when the actual input came from stdin and the caller wants the
-// JSON to mention the original file name).
+// JSON to mention the original file name). The temp file is preferably
+// written next to --path, and that directory (plus any -I dirs) is added
+// to Flang's INCLUDE search path so Fortran INCLUDE of sibling .inc files
+// resolves the same way as under fparser2.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
@@ -2282,14 +2285,63 @@ static std::string slurpStdin() {
 // parser reads from a real file path rather than an in-memory buffer, so
 // stdin-based invocations have to materialise the source on disk briefly.
 // The temp file is deleted from main() before we return.
-static std::string writeTempFile(const std::string &contents) {
+//
+// When `preferredDir` is non-empty (typically the directory of --path), we
+// try to place the temp file there first. Flang resolves Fortran INCLUDE
+// relative to the directory of the file currently being scanned, so a temp
+// file under /tmp would otherwise fail to find sibling `.inc` files next to
+// the caller's original source. Falls back to the system temp directory if
+// the preferred location is not writable.
+static std::string writeTempFile(const std::string &contents,
+                                 const std::string &preferredDir = {}) {
     namespace fs = std::filesystem;
-    auto dir = fs::temp_directory_path();
-    auto path = dir / ("op2-flang-scan-" + std::to_string(::getpid()) + ".F90");
-    std::ofstream ofs(path);
-    ofs << contents;
-    ofs.close();
-    return path.string();
+    const std::string name = "op2-flang-scan-" + std::to_string(::getpid()) + ".F90";
+
+    auto tryWrite = [&](const fs::path &dir) -> std::optional<std::string> {
+        std::error_code ec;
+        if (!dir.empty() && !fs::is_directory(dir, ec)) {
+            return std::nullopt;
+        }
+        auto path = (dir.empty() ? fs::temp_directory_path() : dir) / name;
+        std::ofstream ofs(path);
+        if (!ofs) {
+            return std::nullopt;
+        }
+        ofs << contents;
+        ofs.close();
+        if (!ofs) {
+            std::error_code removeEc;
+            fs::remove(path, removeEc);
+            return std::nullopt;
+        }
+        return path.string();
+    };
+
+    if (!preferredDir.empty()) {
+        if (auto p = tryWrite(fs::path(preferredDir))) {
+            return *p;
+        }
+    }
+    if (auto p = tryWrite(fs::temp_directory_path())) {
+        return *p;
+    }
+    std::cerr << "op2-flang-scan: failed to create temporary source file\n";
+    std::exit(1);
+}
+
+// Parent directory of `path`, or empty if there isn't one.
+static std::string parentDirOf(const std::string &path) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = fs::absolute(fs::path(path), ec);
+    if (ec) {
+        p = fs::path(path);
+    }
+    auto parent = p.parent_path();
+    if (parent.empty()) {
+        return {};
+    }
+    return parent.string();
 }
 
 // Entry point. Steps performed:
@@ -2307,7 +2359,11 @@ int main(int argc, char **argv) {
     //   --stdin            Force stdin mode even if a path is given.
     //   --path <reported>  Path string to put in the JSON "path" field
     //                      (handy when feeding stdin but reporting the
-    //                      original source file name).
+    //                      original source file name). Also used as the
+    //                      preferred directory for the stdin temp file and
+    //                      as an INCLUDE search directory.
+    //   -I <dir>           Extra directory for Fortran INCLUDE resolution
+    //                      (mirrors the translator's -I / include_dirs).
     //   <path>             Bare positional - source file to parse.
     //
     // Anything starting with a `-` we don't recognise is fatal (exit 2);
@@ -2315,6 +2371,7 @@ int main(int argc, char **argv) {
     std::string path;
     bool readStdin = false;
     std::string originalPath; // reported in JSON "path" field
+    std::vector<std::string> includeDirs;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -2322,6 +2379,11 @@ int main(int argc, char **argv) {
             readStdin = true;
         } else if (a == "--path" && i + 1 < argc) {
             originalPath = argv[++i];
+        } else if (a == "-I" && i + 1 < argc) {
+            includeDirs.push_back(argv[++i]);
+        } else if (a.rfind("-I", 0) == 0 && a.size() > 2) {
+            // accept -Idir as well as -I dir
+            includeDirs.push_back(a.substr(2));
         } else if (a.size() > 0 && a[0] != '-') {
             path = a;
         } else {
@@ -2331,13 +2393,22 @@ int main(int argc, char **argv) {
     }
 
     // -- 2. Materialise stdin to a temp file if needed ------------------------
+    //
+    // Prefer the directory of --path so Flang's INCLUDE search (directory of
+    // the file being scanned) finds sibling .inc files. Also record that
+    // directory for options.searchDirectories below as a second line of
+    // defence when the temp file has to live under /tmp instead.
     std::string tempFile;
+    std::string sourceDir = parentDirOf(originalPath.empty() ? path : originalPath);
     if (readStdin || path.empty()) {
         std::string body = slurpStdin();
-        tempFile = writeTempFile(body);
+        tempFile = writeTempFile(body, sourceDir);
         path = tempFile;
     }
     if (originalPath.empty()) originalPath = path;
+    if (sourceDir.empty()) {
+        sourceDir = parentDirOf(originalPath);
+    }
 
     // -- 3. Run Flang's parse pipeline ----------------------------------------
     //
@@ -2345,13 +2416,22 @@ int main(int argc, char **argv) {
     // external preprocessor (pcpp/fpp) and a free-form converter, so there
     // are no live #-directives for Flang's prescanner to process. We still
     // need Flang's prescanner to do the Fortran-specific work (line
-    // continuations, fixed/free form selection, comment stripping, etc.),
-    // which is what Parsing::Prescan does.
+    // continuations, fixed/free form selection, comment stripping, INCLUDE
+    // expansion, etc.), which is what Parsing::Prescan does.
     //
     // AllSources owns all the byte buffers we read; AllCookedSources owns
     // the post-prescan stream we hand to Parsing.
     fp::Options options;
     options.isFixedForm = false;
+
+    // INCLUDE search path: original source directory first, then any -I dirs
+    // from the translator (same set fparser2's FortranStringReader receives).
+    if (!sourceDir.empty()) {
+        options.searchDirectories.push_back(sourceDir);
+    }
+    for (const auto &dir : includeDirs) {
+        options.searchDirectories.push_back(dir);
+    }
 
     fp::AllSources allSources;
     fp::AllCookedSources cooked{allSources};

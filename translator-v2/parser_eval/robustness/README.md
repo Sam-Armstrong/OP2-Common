@@ -10,7 +10,7 @@ Minimal OP2 apps that assess Flang Stage-1 robustness relative to fparser2
 | `syntax_gap` | Fortran constructs fparser2 cannot parse; Flang should translate |
 | `negative_control` | Constructs neither parser handles on this toolchain |
 | `pipeline` | OP2 Flang-path stress (validation, multi-file, macros, funcref, fallback) |
-| `flang_gap` | fparser2 translates natively; Flang Stage 1 fails or falls back |
+| `flang_gap` | Regression tests for former Flang-only gaps (Fortran `INCLUDE`) |
 
 ## Layout
 
@@ -94,13 +94,50 @@ Flang path stays native and still performs the same work as fparser2:
 Contrast: C preprocessor `#include` works for Flang (expanded before scan);
 Fortran `INCLUDE` does not (see `flang_gap`).
 
-### `flang_gap` — fparser2 passes, Flang falls back
+### `flang_gap` — formerly Flang INCLUDE failures (now fixed)
 
-The only natural inverse gap found in probing. Fortran `INCLUDE` is left in
-the source after fpp/pcpp. fparser2 resolves it via `include_dirs` / cwd.
-`op2-flang-scan` feeds source on stdin into a temp file under `/tmp`, so Flang
-reports `INCLUDE: Source file '…' was not found`, Stage 1 falls back to
-fparser2, and translation still succeeds:
+Fortran `INCLUDE "foo.inc"` is **not** expanded by the translator’s C
+preprocessor (fpp/pcpp). It is left in the free-form source and must be
+resolved by the Stage-1 Fortran parser. fparser2 and Flang handle that
+differently, which is what broke these cases.
+
+**Why it failed under Flang**
+
+1. The Python driver always preprocesses the real source file, then invokes
+   `op2-flang-scan --stdin --path <original.F90>` with that text on stdin.
+2. Flang’s parser API needs a real on-disk path, so the scan tool wrote the
+   stdin body to something like `/tmp/op2-flang-scan-<pid>.F90`.
+3. When Flang’s prescanner hits `INCLUDE "loop_site.inc"`, it looks for the
+   file relative to the directory of the **file currently being scanned**
+   (and then any configured search directories). That directory was `/tmp`,
+   not the app directory next to the `.inc` files.
+4. Flang reported `INCLUDE: Source file '….inc' was not found`, Stage 1
+   raised a parse error, and the translator fell back to fparser2 for that
+   file. Translation still completed, but not on the native Flang path.
+
+**Why fparser2 still worked**
+
+fparser2’s `FortranStringReader` is given the translator’s `include_dirs`
+(and typically runs with cwd in the source directory), so it can open the
+same sibling `.inc` even though the input itself is an in-memory string.
+
+**How it was fixed**
+
+In `op2-flang-scan`:
+
+1. Prefer writing the stdin temp file **next to `--path`** (the original
+   source directory), so Flang’s “directory of current file” lookup finds
+   sibling `.inc` files. Fall back to the system temp dir only if that
+   location is not writable.
+2. Add that source directory to Flang’s `Options.searchDirectories`, and
+   accept `-I <dir>` for the same include set the translator already passes
+   to fparser2.
+
+On the Python side, `run_scan` forwards `include_dirs` as `-I` and sets the
+subprocess cwd to the source file’s parent as an extra safeguard.
+
+After the fix, all three cases pass natively on both parsers (no Flang
+Stage-1 fallback):
 
 - `fortran_include_loop` — include of the `op_par_loop` site
 - `fortran_include_host` — include of host-only init

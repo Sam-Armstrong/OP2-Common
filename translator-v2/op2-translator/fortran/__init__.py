@@ -360,7 +360,9 @@ class Fortran(Lang):
         if self.stage1_parser == "flang":
             try:
                 scan_bin = fortran.flang_parser.resolve_scan_binary(self.flang_scan_bin)
-                data = fortran.flang_parser.run_scan(source, path, scan_bin)
+                data = fortran.flang_parser.run_scan(
+                    source, path, scan_bin, include_dirs=include_dirs
+                )
                 return fortran.flang_parser.build_program_from_flang(path, source, data)
             except ParseError as err:
                 print(

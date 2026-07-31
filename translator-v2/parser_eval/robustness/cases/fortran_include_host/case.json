@@ -1,10 +1,10 @@
 {
   "name": "fortran_include_host",
   "category": "flang_gap",
-  "description": "Fortran INCLUDE of host-only init code (fparser2 pass, Flang Stage-1 fallback)",
-  "notes": "Shows the INCLUDE gap is not limited to including OP2 call sites",
+  "description": "Fortran INCLUDE of host-only init code",
+  "notes": "Host-only INCLUDE (no OP2 calls in the .inc file)",
   "sources": ["fortran_include_host.F90"],
   "targets": ["seq"],
   "expect_fparser2": "pass",
-  "expect_flang": "fallback"
+  "expect_flang": "pass"
 }

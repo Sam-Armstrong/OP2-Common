@@ -20,7 +20,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import op as OP
 from store import Application, Function, Location, ParseError, Program
@@ -86,17 +86,31 @@ def resolve_scan_binary(override: Optional[str] = None) -> Path:
 # Tool invocation
 # -----------------------------------------------------------------------------
 
-def run_scan(source: str, path: Path, scan_bin: Path) -> Dict[str, Any]:
+def run_scan(
+    source: str,
+    path: Path,
+    scan_bin: Path,
+    include_dirs: Optional[Iterable[Path]] = None,
+) -> Dict[str, Any]:
     """
     Run op2-flang-scan on the given (already preprocessed) source text and
     return the parsed JSON document.
+
+    ``include_dirs`` are forwarded as ``-I`` so Flang can resolve Fortran
+    ``INCLUDE`` the same way fparser2's ``FortranStringReader`` does.
     """
+    cmd = [str(scan_bin), "--stdin", "--path", str(path)]
+    for d in include_dirs or []:
+        cmd.extend(["-I", str(d)])
     try:
         proc = subprocess.run(
-            [str(scan_bin), "--stdin", "--path", str(path)],
+            cmd,
             input=source.encode("utf-8"),
             capture_output=True,
             check=False,
+            # cwd = source directory so relative INCLUDE also works if the
+            # scan binary has to fall back to a /tmp temp file
+            cwd=str(path.parent) if path.parent else None,
         )
     except FileNotFoundError as e:
         raise ParseError(f"failed to launch op2-flang-scan: {e}")
