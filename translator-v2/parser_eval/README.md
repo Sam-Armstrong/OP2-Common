@@ -20,6 +20,7 @@ Current examples (all unstructured-mesh style):
 - `airfoil` — existing CFD mini-app
 - `tri_diff` — triangular cell mesh, edge→cell diffusion
 - `mesh_res` — edge residual with edge→node and edge→cell maps
+- `scale_mesh` — larger multi-file variant (~2.4k lines, 10 sources) for Stage-1 scaling
 
 ## Adding an example
 

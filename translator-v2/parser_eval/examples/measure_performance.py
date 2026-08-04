@@ -426,10 +426,21 @@ ALGORITHMIC: Dict[str, Dict[str, float]] = {
         "flops_per_iter": 720000.0 * 200.0,
         "bytes_per_iter": 720000.0 * 13.0 * 8.0,
     },
+    # same mesh/iter as tri_diff; edge_flux_01 body is fatter (~700 FLOP)
+    "scale_mesh": {
+        "niter": 700.0,
+        "flops_per_iter": 10826200.0 * 700.0 + 7220000.0 * 100.0,
+        "bytes_per_iter": 10826200.0 * 32.0 + 7220000.0 * 64.0,
+    },
 }
 
 
 def algorithmic_roofline(example: str, time_s: float) -> Dict[str, Any]:
+    if example not in ALGORITHMIC:
+        return {
+            "method": "algorithmic_model",
+            "error": f"no ALGORITHMIC model for {example}",
+        }
     model = ALGORITHMIC[example]
     flops = model["flops_per_iter"] * model["niter"]
     bytes_ = model["bytes_per_iter"] * model["niter"]
@@ -765,10 +776,11 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
     lines.append("# Parser evaluation examples — performance notes")
     lines.append("")
     lines.append(
-        "Measurements for the three core unstructured-mesh examples "
-        "(`airfoil`, `tri_diff`, `mesh_res`): Flang Stage-1 subprocess/JSON "
-        "overhead versus parse time, and runtime equivalence of generated "
-        "`c_cuda` binaries (bandwidth, throughput, arithmetic intensity)."
+        "Measurements for the unstructured-mesh examples "
+        "(`airfoil`, `tri_diff`, `mesh_res`, plus the larger multi-file "
+        "`scale_mesh`): Flang Stage-1 subprocess/JSON overhead versus parse "
+        "time, and runtime equivalence of generated `c_cuda` binaries "
+        "(bandwidth, throughput, arithmetic intensity)."
     )
     lines.append("")
     lines.append("Reproduce with (WSL/Linux):")
@@ -786,20 +798,21 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
         "For each example the Fortran sources are preprocessed once, then "
         "`op2-flang-scan --timing` is invoked per file (warmup discarded). "
         "Times below are **app totals** (sum over source files), mean of "
-        "timed runs. **Complete Flang pipeline** is the Python-observed wall "
-        "(spawn through `json.loads`); **LLVM Flang preprocess + parse** is "
-        "only `Parsing::Prescan` + `Parse` inside the C++ binary."
+        "timed runs, in **milliseconds**. **Complete Flang pipeline** is the "
+        "Python-observed wall (spawn through `json.loads`); **LLVM Flang "
+        "preprocess + parse** is only `Parsing::Prescan` + `Parse` inside "
+        "the C++ binary."
     )
     lines.append("")
     lines.append(
-        "| Example | Complete Flang pipeline | LLVM Flang preprocess + parse | "
-        "JSON walk+emit | `json.loads` | spawn/IPC | materialise | "
-        "LLVM ÷ complete | fparser2 parse |"
+        "| Example | Complete Flang pipeline (ms) | LLVM Flang preprocess + parse (ms) | "
+        "JSON walk+emit (ms) | `json.loads` (ms) | spawn/IPC (ms) | "
+        "materialise (ms) | LLVM ÷ complete | fparser2 parse (ms) |"
     )
     lines.append(
-        "|---------|------------------------:|------------------------------:|"
-        "---------------:|-------------:|----------:|------------:|"
-        "----------------:|---------------:|"
+        "|---------|-----------------------------:|-----------------------------------:|"
+        "-------------------:|-----------------:|---------------:|"
+        "----------------:|----------------:|--------------------:|"
     )
     for s in stage1:
         b = s["breakdown"]
@@ -833,12 +846,12 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
     lines.append("")
     lines.append(
         "Outside Flang Prescan/Parse, the largest cost is **subprocess "
-        "spawn/IPC** (~35 ms per source file here), not JSON. Walk+JSON emit "
-        "is a few–fourteen milliseconds per app; Python `json.loads` is "
-        "sub-millisecond to ~1 ms. Materialising stdin to a temp file is "
-        "a few milliseconds. Combined non-parse overhead is about half of "
-        "the LLVM parse time (~0.5×). fparser2 has no C++ subprocess; its "
-        "column is pure in-process parse time for the same preprocessed inputs."
+        "spawn/IPC** (~35–40 ms per source file here), not JSON — though "
+        "walk+JSON and `json.loads` grow with fat kernel modules (tens of "
+        "milliseconds on `scale_mesh`). Combined non-parse overhead is about "
+        "half of the LLVM parse time (~0.5×). fparser2 has no C++ subprocess; "
+        "its column is pure in-process parse time for the same preprocessed "
+        "inputs."
     )
     lines.append("")
     # Flang vs fparser2 Stage-1 summary (from measured app totals)
@@ -916,6 +929,77 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                          "performance cost is not a significant issue relative to the "
                          "improvements in robustness.")
             lines.append("")
+            by_ex = {s["example"]: s for s in stage1}
+            if "scale_mesh" in by_ex and "tri_diff" in by_ex:
+                sm, td = by_ex["scale_mesh"], by_ex["tri_diff"]
+                sm_files = len(sm.get("files") or [])
+                td_files = len(td.get("files") or [])
+                sm_wall = sm["app"]["wall_ms_mean"]
+                td_wall = td["app"]["wall_ms_mean"]
+                sm_llvm = sm["breakdown"]["flang_parse_ms"]
+                td_llvm = td["breakdown"]["flang_parse_ms"]
+                sm_spawn = sm["breakdown"]["subprocess_spawn_ipc_ms"]
+                td_spawn = td["breakdown"]["subprocess_spawn_ipc_ms"]
+                sm_fp = sm["fparser2_parse_ms_mean"]
+                td_fp = td["fparser2_parse_ms_mean"]
+                lines.append("### Scaling in practice (`scale_mesh`)")
+                lines.append("")
+                lines.append(
+                    f"`scale_mesh` is a deliberately larger app: "
+                    f"**{sm_files} source files / ~2.4k lines** of fat kernel "
+                    f"modules versus `tri_diff`’s **{td_files} file / ~200 lines**. "
+                    f"Only one edge/cell kernel pair runs on the GPU (same mesh "
+                    f"as `tri_diff`); the extra modules exist to inflate Stage-1 "
+                    f"parse and per-file spawn cost."
+                )
+                lines.append("")
+                lines.append(
+                    "| Metric | tri_diff | scale_mesh | scale ÷ tri |"
+                )
+                lines.append("|---|---:|---:|---:|")
+                lines.append(
+                    f"| Source files | {td_files} | {sm_files} | "
+                    f"{sm_files / max(td_files, 1):.1f}× |"
+                )
+                lines.append(
+                    f"| Complete Flang pipeline (ms) | {td_wall:.1f} | "
+                    f"{sm_wall:.1f} | {sm_wall / td_wall:.2f}× |"
+                )
+                lines.append(
+                    f"| LLVM Flang preprocess + parse (ms) | {td_llvm:.1f} | "
+                    f"{sm_llvm:.1f} | {sm_llvm / td_llvm:.2f}× |"
+                )
+                lines.append(
+                    f"| spawn/IPC (ms) | {td_spawn:.1f} | {sm_spawn:.1f} | "
+                    f"{sm_spawn / td_spawn:.2f}× |"
+                )
+                lines.append(
+                    f"| fparser2 parse (ms) | {td_fp:.1f} | {sm_fp:.1f} | "
+                    f"{sm_fp / td_fp:.2f}× |"
+                )
+                lines.append(
+                    f"| Complete Flang ÷ fparser2 | "
+                    f"{td_wall / td_fp:.2f}× | {sm_wall / sm_fp:.2f}× | — |"
+                )
+                lines.append("")
+                lines.append(
+                    "In practice, growing **both** file count and AST size "
+                    "scales Flang’s complete pipeline roughly with the work: "
+                    f"spawn/IPC grows ~linearly with files "
+                    f"({sm_spawn / td_spawn:.1f}× for "
+                    f"{sm_files / max(td_files, 1):.0f}× files), "
+                    "and LLVM parse grows with the fat modules. fparser2 parse "
+                    "grows similarly with AST size, so the **complete Flang ÷ "
+                    "fparser2 ratio stays about 2×** rather than improving. "
+                    "Amortising Flang’s spawn tax needs larger **per-file** "
+                    "sources (or a long-lived scan process), not merely more "
+                    "files of similar size. Absolute Stage-1 cost remains "
+                    "milliseconds-to-seconds and is small next to robustness "
+                    "gains, but this suite does not show Flang becoming "
+                    "*relatively* cheaper than fparser2 as apps grow in file "
+                    "count."
+                )
+                lines.append("")
     lines.append("## Runtime equivalence (`c_cuda`)")
     lines.append("")
     if not runtime:
@@ -1113,6 +1197,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
 
     out_json = examples_root() / "performance_results.json"
+    # merge with previous results when measuring a subset of examples
+    if out_json.is_file() and args.examples:
+        prev = json.loads(out_json.read_text(encoding="utf-8"))
+        stage1_results = _merge_by_example(prev.get("stage1") or [], stage1_results)
+        if runtime_results:
+            runtime_results = _merge_by_example(
+                prev.get("runtime") or [], runtime_results
+            )
+        elif args.skip_runtime:
+            runtime_results = prev.get("runtime") or []
+
     out_json.write_text(
         json.dumps({"stage1": stage1_results, "runtime": runtime_results}, indent=2),
         encoding="utf-8",
@@ -1121,6 +1216,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     write_readme(examples_root() / "README.md", stage1_results, runtime_results)
     return 0
+
+
+def _merge_by_example(
+    old: List[Dict[str, Any]],
+    new: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    by_name = {r["example"]: r for r in old if "example" in r}
+    for r in new:
+        by_name[r["example"]] = r
+    return [by_name[k] for k in sorted(by_name)]
 
 
 if __name__ == "__main__":
