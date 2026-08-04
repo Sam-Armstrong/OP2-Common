@@ -39,7 +39,7 @@ That gap is mostly architecture, not “C++ vs Python.” Flang Stage-1 is a col
 
 So many small files favour fparser2 (spawn dominates); few large files shrink Flang’s relative penalty; many kernels in one file mainly hurt both through source/AST size, with JSON emit still a small slice on these examples.
 
-Everythin is measured in milliseconds, and the Flang path will scale better to larger applications,
+Everything is measured in milliseconds, and the Flang path will scale better to larger applications,
 so the translation performance cost is not a significant issue relative to the improvements in robustness.
 
 

@@ -911,6 +911,11 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 "emit still a small slice on these examples."
             )
             lines.append("")
+            lines.append("Everything is measured in milliseconds, and the Flang path "
+                         "will scale better to larger applications, so the translation "
+                         "performance cost is not a significant issue relative to the "
+                         "improvements in robustness.")
+            lines.append("")
     lines.append("## Runtime equivalence (`c_cuda`)")
     lines.append("")
     if not runtime:
