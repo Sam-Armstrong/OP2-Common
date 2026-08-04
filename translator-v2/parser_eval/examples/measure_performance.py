@@ -50,6 +50,13 @@ TIMING_RE = re.compile(
     r" json_bytes=(?P<json_bytes>[0-9]+)"
 )
 
+BATCH_DONE_RE = re.compile(
+    r"OP2_FLANG_SCAN_BATCH_DONE"
+    r" units=(?P<units>[0-9]+)"
+    r" failures=(?P<failures>[0-9]+)"
+    r" session_ms=(?P<session>[0-9.]+)"
+)
+
 NCU_METRICS = [
     "dram__throughput.avg.pct_of_peak_sustained_elapsed",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
@@ -169,59 +176,83 @@ def preprocess_sources(
     return out
 
 
-def time_flang_scan(
+def _build_batch_stdin(prepared: Sequence[Tuple[Path, str]]) -> bytes:
+    chunks: List[bytes] = [b"OP2_FLANG_BATCH_V1\n"]
+    for path, source in prepared:
+        body = source.encode("utf-8")
+        chunks.append(str(path).encode("utf-8") + b"\n")
+        chunks.append(str(len(body)).encode("ascii") + b"\n")
+        chunks.append(body)
+    return b"".join(chunks)
+
+
+def time_flang_scan_batch(
     scan: Path,
-    path: Path,
-    source: str,
+    prepared: Sequence[Tuple[Path, str]],
     include_dirs: Sequence[Path],
-) -> Stage1FileTiming:
-    cmd = [str(scan), "--stdin", "--timing", "--path", str(path)]
+) -> Tuple[List[Stage1FileTiming], float, float]:
+    """
+    One --batch subprocess for all sources (matches production Stage-1).
+
+    Returns (per-file timings, batch_wall_ms, session_ms).
+    spawn/IPC is attributed entirely to the first file (once per batch).
+    """
+    cmd = [str(scan), "--batch", "--timing"]
     for d in include_dirs:
         cmd.extend(["-I", str(d)])
 
+    payload = _build_batch_stdin(prepared)
     t0 = time.perf_counter()
-    proc = subprocess.run(
-        cmd,
-        input=source.encode("utf-8"),
-        capture_output=True,
-        cwd=str(path.parent),
-    )
+    proc = subprocess.run(cmd, input=payload, capture_output=True)
     wall_ms = (time.perf_counter() - t0) * 1000.0
     if proc.returncode != 0:
         raise RuntimeError(
-            f"scan failed for {path}:\n{proc.stderr.decode('utf-8', errors='replace')}"
+            f"batch scan failed:\n{proc.stderr.decode('utf-8', errors='replace')}"
         )
 
-    stdout = proc.stdout
+    stdout = proc.stdout.decode("utf-8", errors="replace")
     t1 = time.perf_counter()
-    json.loads(stdout.decode("utf-8"))
-    json_loads_ms = (time.perf_counter() - t1) * 1000.0
+    docs = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if line:
+            docs.append(json.loads(line))
+    json_loads_total_ms = (time.perf_counter() - t1) * 1000.0
 
     stderr = proc.stderr.decode("utf-8", errors="replace")
-    m = TIMING_RE.search(stderr)
-    if not m:
-        raise RuntimeError(f"missing OP2_FLANG_SCAN_TIMING in stderr for {path}:\n{stderr}")
+    timings = list(TIMING_RE.finditer(stderr))
+    done = BATCH_DONE_RE.search(stderr)
+    if len(timings) != len(prepared):
+        raise RuntimeError(
+            f"expected {len(prepared)} OP2_FLANG_SCAN_TIMING lines, "
+            f"got {len(timings)}:\n{stderr}"
+        )
+    if not done:
+        raise RuntimeError(f"missing OP2_FLANG_SCAN_BATCH_DONE:\n{stderr}")
 
-    materialize = float(m.group("materialize"))
-    parse = float(m.group("parse"))
-    walk_emit = float(m.group("walk_emit"))
-    stdout_write = float(m.group("stdout_write"))
-    scan_total = float(m.group("total"))
-    json_bytes = int(m.group("json_bytes"))
-    spawn_ipc = max(0.0, wall_ms - scan_total - json_loads_ms)
+    session_ms = float(done.group("session"))
+    spawn_ipc = max(0.0, wall_ms - session_ms - json_loads_total_ms)
+    n = max(len(prepared), 1)
+    loads_each = json_loads_total_ms / n
 
-    return Stage1FileTiming(
-        path=str(path),
-        wall_ms=wall_ms,
-        json_loads_ms=json_loads_ms,
-        materialize_ms=materialize,
-        parse_ms=parse,
-        walk_emit_ms=walk_emit,
-        stdout_write_ms=stdout_write,
-        scan_total_ms=scan_total,
-        json_bytes=json_bytes,
-        spawn_ipc_ms=spawn_ipc,
-    )
+    out: List[Stage1FileTiming] = []
+    for i, ((path, _), m) in enumerate(zip(prepared, timings)):
+        out.append(
+            Stage1FileTiming(
+                path=str(path),
+                wall_ms=(wall_ms / n),
+                json_loads_ms=loads_each,
+                materialize_ms=float(m.group("materialize")),
+                parse_ms=float(m.group("parse")),
+                walk_emit_ms=float(m.group("walk_emit")),
+                stdout_write_ms=float(m.group("stdout_write")),
+                scan_total_ms=float(m.group("total")),
+                json_bytes=int(m.group("json_bytes")),
+                # charge spawn once on the first unit
+                spawn_ipc_ms=spawn_ipc if i == 0 else 0.0,
+            )
+        )
+    return out, wall_ms, session_ms
 
 
 def measure_stage1(
@@ -235,14 +266,16 @@ def measure_stage1(
     include_dirs = [root / "op2" / "include", workdir]
     scan = scan_bin(root)
 
-    # warmup
-    for path, text in prepared:
-        time_flang_scan(scan, path, text, include_dirs)
+    # warmup (batch path — same as production --parser flang)
+    time_flang_scan_batch(scan, prepared, include_dirs)
 
     per_file: Dict[str, List[Stage1FileTiming]] = {str(p): [] for p, _ in prepared}
+    batch_walls: List[float] = []
     for _ in range(runs):
-        for path, text in prepared:
-            per_file[str(path)].append(time_flang_scan(scan, path, text, include_dirs))
+        samples, wall_ms, _session = time_flang_scan_batch(scan, prepared, include_dirs)
+        batch_walls.append(wall_ms)
+        for s in samples:
+            per_file[s.path].append(s)
 
     # also time fparser2 Stage-1 parse-only for context (no subprocess)
     sys.path.insert(0, str(root / "translator-v2" / "op2-translator"))
@@ -259,15 +292,6 @@ def measure_stage1(
         fp_times.append((time.perf_counter() - t0) * 1000.0)
 
     agg_rows = []
-    totals = {
-        "wall_ms": [],
-        "parse_ms": [],
-        "walk_emit_ms": [],
-        "json_loads_ms": [],
-        "spawn_ipc_ms": [],
-        "materialize_ms": [],
-        "scan_total_ms": [],
-    }
     for path, samples in per_file.items():
         row = {"file": Path(path).name, "n": len(samples)}
         for key in (
@@ -284,25 +308,33 @@ def measure_stage1(
             mu, sd = mean_std([float(v) for v in vals])
             row[f"{key}_mean"] = mu
             row[f"{key}_std"] = sd
-            if key != "json_bytes":
-                # sum across files for app-level totals (mean over runs)
-                pass
         agg_rows.append(row)
 
-    # app-level: sum file means (one logical Stage-1 for the whole app)
+    # app-level: sum per-file metrics over one batch run
     app = {}
-    for key in totals:
+    for key in (
+        "wall_ms",
+        "parse_ms",
+        "walk_emit_ms",
+        "json_loads_ms",
+        "spawn_ipc_ms",
+        "materialize_ms",
+        "scan_total_ms",
+    ):
         summed_runs = []
-        n = runs
-        for r in range(n):
+        for r in range(runs):
             summed_runs.append(sum(per_file[p][r].__dict__[key] for p in per_file))
         mu, sd = mean_std(summed_runs)
         app[f"{key}_mean"] = mu
         app[f"{key}_std"] = sd
 
-    # ser/deser vs parse breakdown (app level)
+    # wall should match measured batch wall (not sum of equal splits)
+    wall_mu, wall_sd = mean_std(batch_walls)
+    app["wall_ms_mean"] = wall_mu
+    app["wall_ms_std"] = wall_sd
+
     parse_mu = app["parse_ms_mean"]
-    ser_mu = app["walk_emit_ms_mean"]  # C++ JSON serialize + walk
+    ser_mu = app["walk_emit_ms_mean"]
     deser_mu = app["json_loads_ms_mean"]
     spawn_mu = app["spawn_ipc_ms_mean"]
     mat_mu = app["materialize_ms_mean"]
@@ -312,6 +344,7 @@ def measure_stage1(
     return {
         "example": ex["name"],
         "runs": runs,
+        "scan_mode": "batch",
         "files": agg_rows,
         "app": app,
         "fparser2_parse_ms_mean": fp_mu,
@@ -802,12 +835,13 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
     lines.append("")
     lines.append(
         "For each example the Fortran sources are preprocessed once, then "
-        "`op2-flang-scan --timing` is invoked per file (warmup discarded). "
-        "Times below are **app totals** (sum over source files), mean of "
-        "timed runs, in **milliseconds**. **Complete Flang pipeline** is the "
-        "Python-observed wall (spawn through `json.loads`); **LLVM Flang "
-        "preprocess + parse** is only `Parsing::Prescan` + `Parse` inside "
-        "the C++ binary."
+        "scanned with a single `op2-flang-scan --batch --timing` process "
+        "(warmup discarded; matches production `--parser flang`). Times "
+        "below are **app totals**, mean of timed runs, in **milliseconds**. "
+        "**Complete Flang pipeline** is the Python-observed wall (one spawn "
+        "through `json.loads`); **LLVM Flang preprocess + parse** sums "
+        "`Parsing::Prescan` + `Parse` over every translation unit inside "
+        "that process."
     )
     lines.append("")
     lines.append(
@@ -851,13 +885,11 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
         )
     lines.append("")
     lines.append(
-        "Outside Flang Prescan/Parse, the largest cost is **subprocess "
-        "spawn/IPC** (~35–40 ms per source file here), not JSON — though "
-        "walk+JSON and `json.loads` grow with fat kernel modules (tens of "
-        "milliseconds on `scale_mesh`). Combined non-parse overhead is about "
-        "half of the LLVM parse time (~0.5×). fparser2 has no C++ subprocess; "
-        "its column is pure in-process parse time for the same preprocessed "
-        "inputs."
+        "With `--batch`, spawn/IPC is paid **once per app** (~20–40 ms here), "
+        "not once per file. Remaining non-parse cost is materialise + "
+        "walk/JSON + `json.loads` (grows with fat kernel modules). fparser2 "
+        "has no C++ subprocess; its column is pure in-process parse time for "
+        "the same preprocessed inputs."
     )
     lines.append("")
     # Flang vs fparser2 Stage-1 summary (from measured app totals)
@@ -896,28 +928,26 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 f"Overall, the Flang Stage-1 path is {verdict}. "
                 "LLVM Flang preprocess + parse vs fparser2: "
                 f"{llvm_bits}. Complete Flang pipeline vs fparser2: "
-                f"{pipe_bits}. Multi-file apps pay a cold subprocess "
-                "spawn/IPC tax per source file that fparser2 never incurs; "
-                "a large single-file app can amortise that and even beat "
-                "fparser2 on wall time."
+                f"{pipe_bits}. Production Stage-1 now uses "
+                "`op2-flang-scan --batch` so spawn/IPC is paid once per app."
             )
             lines.append("")
             lines.append(
-                "That gap is mostly architecture, not “C++ vs Python.” Flang "
-                "Stage-1 is a cold out-of-process pipeline per source file "
-                "(spawn a large LLVM-linked binary, materialise, Prescan/Parse, "
-                "walk+JSON, deserialise), while fparser2 parses in-process with "
-                "a lighter F2008-oriented AST. On small/multi-file inputs the "
-                "LLVM Prescan+Parse slice alone can lose to fparser2 because "
-                "Flang does more frontend work (and repeats fixed per-file "
-                "cost). How the two paths should scale with program shape:"
+                "True multi-file `Prescan`+`Parse` in one Flang call is "
+                "**not** possible (one translation unit per call). Batch mode "
+                "runs Prescan→Parse→walk sequentially in **one process**, "
+                "amortising LLVM binary load. fparser2 remains fully "
+                "in-process with a lighter F2008-oriented AST. How the paths "
+                "scale after batching:"
             )
             lines.append("")
-            lines.append("| Scaling driver | Flang path | fparser2 path |")
+            lines.append(
+                "| Scaling driver | Flang path (batched) | fparser2 path |"
+            )
             lines.append("|---|---|---|")
             lines.append(
-                "| **# of source files** | Bad: ~fixed spawn/IPC **per file** | "
-                "Mostly linear in parse work only |"
+                "| **# of source files** | One spawn; Prescan/Parse still "
+                "per file (some fixed per-TU cost) | Linear in parse work only |"
             )
             lines.append(
                 "| **Total Fortran size / AST size** | Both grow "
@@ -929,9 +959,8 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 "Parse grows; no JSON, but still walks/builds ASTs in Python |"
             )
             lines.append(
-                "| **Very large single-file apps** | Spawn amortises; LLVM "
-                "parse may catch up or win | Stays competitive if AST work "
-                "stays lighter |"
+                "| **Very large apps** | Batch + compiled frontend often "
+                "beats fparser2 | Competitive on small TUs |"
             )
             lines.append("")
             lines.append(
@@ -988,6 +1017,8 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 td_files = len(td.get("files") or [])
                 sm_spawn = sm["breakdown"]["subprocess_spawn_ipc_ms"]
                 td_spawn = td["breakdown"]["subprocess_spawn_ipc_ms"]
+                sm_fp = sm["fparser2_parse_ms_mean"]
+                td_fp = td["fparser2_parse_ms_mean"]
                 lines.append("### Scaling in practice (`scale_mesh`)")
                 lines.append("")
                 lines.append(
@@ -1006,14 +1037,15 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 _row("scale_mesh", td, sm)
                 lines.append("")
                 lines.append(
-                    "Growing **both** file count and AST size scales Flang’s "
-                    "complete pipeline roughly with the work: "
-                    f"spawn/IPC grows ~linearly with files "
-                    f"({sm_spawn / td_spawn:.1f}× for "
-                    f"{sm_files / max(td_files, 1):.0f}× files), "
-                    "and LLVM parse grows with the fat modules. fparser2 parse "
-                    "grows similarly with AST size, so the **complete Flang ÷ "
-                    "fparser2 ratio stays about 2×** rather than improving."
+                    "With batching, spawn stays ~one hit "
+                    f"({sm_spawn:.0f} ms vs {td_spawn:.0f} ms) even at "
+                    f"{sm_files}× files; complete Flang grows mainly with "
+                    "parse/AST work "
+                    f"({sm['app']['wall_ms_mean'] / td['app']['wall_ms_mean']:.2f}×), "
+                    "while fparser2 tracks total AST size more steeply "
+                    f"({sm_fp / td_fp:.2f}×). Net: multi-file "
+                    f"`scale_mesh` is **faster** than fparser2 "
+                    f"({sm['app']['wall_ms_mean'] / sm_fp:.2f}×)."
                 )
                 lines.append("")
 
@@ -1068,21 +1100,14 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 )
                 lines.append("")
                 lines.append(
-                    "Collapsing to one file cuts spawn/IPC to a single "
-                    f"~{flat_spawn:.0f} ms hit "
-                    f"(vs ~{sm_spawn:.0f} ms across {sm_files} files). "
-                    f"LLVM Prescan+Parse also drops sharply "
-                    f"({flat_llvm:.0f} vs {sm_llvm:.0f} ms): Flang pays "
-                    "substantial **per-file** frontend cost when the same "
-                    "kernel mass is split across modules, whereas one "
-                    "`CONTAINS` program unit is parsed once. fparser2 is "
-                    f"nearly unchanged ({flat_fp:.0f} vs {sm_fp:.0f} ms) "
-                    "because it is already in-process over similar total "
-                    "AST size. Net result: complete Flang ÷ fparser2 goes "
-                    f"from {sm_wall / sm_fp:.2f}× (multi) to "
-                    f"{flat_wall / flat_fp:.2f}× (flat) — Flang becomes "
-                    "**faster** than fparser2 when the large app is a "
-                    "single translation unit."
+                    "After batching, spawn is already ~one hit on both "
+                    f"({flat_spawn:.0f} vs {sm_spawn:.0f} ms). Flattening "
+                    "still helps LLVM Prescan+Parse "
+                    f"({flat_llvm:.0f} vs {sm_llvm:.0f} ms) by removing "
+                    "per-TU frontend fixed cost. fparser2 is nearly unchanged "
+                    f"({flat_fp:.0f} vs {sm_fp:.0f} ms). Complete Flang ÷ "
+                    f"fparser2: {sm_wall / sm_fp:.2f}× (multi) → "
+                    f"{flat_wall / flat_fp:.2f}× (flat)."
                 )
                 lines.append("")
     lines.append("## Runtime equivalence (`c_cuda`)")
@@ -1282,10 +1307,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
 
     out_json = examples_root() / "performance_results.json"
-    # merge with previous results when measuring a subset of examples
-    if out_json.is_file() and args.examples:
+    # merge with previous results when measuring a subset and/or skipping a phase
+    if out_json.is_file() and (args.examples or args.skip_runtime or args.skip_stage1):
         prev = json.loads(out_json.read_text(encoding="utf-8"))
-        stage1_results = _merge_by_example(prev.get("stage1") or [], stage1_results)
+        if args.examples or args.skip_stage1:
+            stage1_results = _merge_by_example(
+                prev.get("stage1") or [], stage1_results
+            )
         if runtime_results:
             runtime_results = _merge_by_example(
                 prev.get("runtime") or [], runtime_results

@@ -371,6 +371,67 @@ class Fortran(Lang):
                     file=sys.stderr,
                 )
 
+        return self._parseProgramFparser2(path, source, include_dirs)
+
+    def parsePrograms(
+        self, paths: List[Path], include_dirs: Set[Path], defines: List[str]
+    ) -> List[Program]:
+        """
+        Parse many Fortran sources into Programs.
+
+        With ``--parser flang``, preprocesses every file then runs a single
+        ``op2-flang-scan --batch`` subprocess so LLVM load / process spawn is
+        paid once. Per-file Flang failures fall back to fparser2 individually.
+        """
+        if self.stage1_parser != "flang" or not paths:
+            return [self.parseProgram(p, include_dirs, defines) for p in paths]
+
+        frozen_inc = frozenset(include_dirs)
+        frozen_defs = frozenset(defines)
+        prepared: List[Tuple[Path, str]] = []
+        for path in paths:
+            prepared.append((path, self.preprocess(path, frozen_inc, frozen_defs)))
+
+        try:
+            scan_bin = fortran.flang_parser.resolve_scan_binary(self.flang_scan_bin)
+            scanned = fortran.flang_parser.run_scan_batch(
+                prepared, scan_bin, include_dirs=include_dirs
+            )
+        except ParseError as err:
+            print(
+                f"Warning: Flang Stage 1 batch scan failed; "
+                f"falling back to per-file parsing: {err}",
+                file=sys.stderr,
+            )
+            return [self.parseProgram(p, include_dirs, defines) for p in paths]
+
+        programs: List[Program] = []
+        for path, source in prepared:
+            data = scanned[path]
+            if data.get("error"):
+                print(
+                    f"Warning: Flang Stage 1 parse failed for {path}; "
+                    f"falling back to fparser2: {data['error']}",
+                    file=sys.stderr,
+                )
+                programs.append(self._parseProgramFparser2(path, source, include_dirs))
+                continue
+            try:
+                programs.append(
+                    fortran.flang_parser.build_program_from_flang(path, source, data)
+                )
+            except ParseError as err:
+                print(
+                    f"Warning: Flang Stage 1 build failed for {path}; "
+                    f"falling back to fparser2: {err}",
+                    file=sys.stderr,
+                )
+                programs.append(self._parseProgramFparser2(path, source, include_dirs))
+        return programs
+
+    def _parseProgramFparser2(
+        self, path: Path, source: str, include_dirs: Set[Path]
+    ) -> Program:
         try:
             reader = FortranStringReader(source, include_dirs=list(include_dirs))
             ast = self.parser(reader)

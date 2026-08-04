@@ -237,13 +237,36 @@ def parse(args: Namespace, lang: Lang) -> Application:
         print(f"    {raw_path}")
 
     app = Application()
+    include_dirs = set([Path(dir) for [dir] in args.I])
+    defines = [define for [define] in args.D]
+
+    # Flang Stage-1: one op2-flang-scan --batch process for all files (unless
+    # -mp is set, which shards across workers and still benefits per-shard).
+    parse_programs = getattr(lang, "parsePrograms", None)
+    use_flang_batch = (
+        callable(parse_programs)
+        and getattr(lang, "stage1_parser", None) == "flang"
+        and not args.multiprocess_parse
+    )
+
+    if use_flang_batch:
+        try:
+            app.programs = parse_programs(
+                [Path(p) for p in args.file_paths], include_dirs, defines
+            )
+        except fortran.FortranSyntaxError as err:
+            print()
+            print(f"Syntax error in file {err.filename}:")
+            print(err.message)
+            exit(1)
+        return app
 
     if lang.ast_is_serializable:
         try:
             if args.multiprocess_parse:
                 app.programs = Pool().starmap(parse_file, f_args)
             else:
-                app.programs = [parse_file(*args) for args in f_args]
+                app.programs = [parse_file(*a) for a in f_args]
         except fortran.FortranSyntaxError as err:
             print()
             print(f"Syntax error in file {err.filename}:")

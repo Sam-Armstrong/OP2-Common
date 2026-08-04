@@ -36,8 +36,10 @@
 //     stop after Parse() and let the Python side filter / cross-reference.
 //   * No code generation. We're a parser-only tool; we don't lower to MLIR
 //     or LLVM IR.
-//   * No persistent state. Each invocation parses one translation unit and
-//     exits; the Python driver re-runs us per file.
+//   * No cross-file parse. Flang's Prescan/Parse is one translation unit per
+//     call. The Python driver may still invoke us once with --batch to parse
+//     many TUs sequentially in a single process (amortising LLVM binary
+//     load / process spawn).
 //
 // JSON output contract
 // --------------------
@@ -61,6 +63,7 @@
 // CLI
 // ---
 //   op2-flang-scan [--stdin] [--timing] [--path <reported-path>] [-I <dir>]... [path]
+//   op2-flang-scan --batch [--timing] [-I <dir>]...
 //
 // When --stdin is given (or no path argument is supplied), the source is
 // slurped from stdin into a temp file and that temp file is fed to Flang.
@@ -70,6 +73,10 @@
 // written next to --path, and that directory (plus any -I dirs) is added
 // to Flang's INCLUDE search path so Fortran INCLUDE of sibling .inc files
 // resolves the same way as under fparser2.
+//
+// --batch reads a framed multi-unit stream from stdin (see runBatchMode)
+// and emits one JSON object per unit as NDJSON on stdout. Each unit still
+// gets its own Prescan+Parse; the win is a single process / LLVM load.
 // =============================================================================
 
 // -----------------------------------------------------------------------------
@@ -2294,9 +2301,11 @@ static std::string slurpStdin() {
 // the caller's original source. Falls back to the system temp directory if
 // the preferred location is not writable.
 static std::string writeTempFile(const std::string &contents,
-                                 const std::string &preferredDir = {}) {
+                                 const std::string &preferredDir = {},
+                                 int uniqueSuffix = 0) {
     namespace fs = std::filesystem;
-    const std::string name = "op2-flang-scan-" + std::to_string(::getpid()) + ".F90";
+    const std::string name = "op2-flang-scan-" + std::to_string(::getpid()) +
+                             "-" + std::to_string(uniqueSuffix) + ".F90";
 
     auto tryWrite = [&](const fs::path &dir) -> std::optional<std::string> {
         std::error_code ec;
@@ -2351,96 +2360,64 @@ static std::string parentDirOf(const std::string &path) {
     return parent.string();
 }
 
-// Entry point. Steps performed:
-//
-//   1. Argument parsing.
-//   2. Materialise the source on disk if it came in on stdin.
-//   3. Configure Flang and run Prescan + Parse.
-//   4. Bail out with a non-zero exit if Flang reported fatal parse errors.
-//   5. Walk the parse tree with Scanner, accumulating JSON events.
-//   6. Print the JSON document and clean up.
-int main(int argc, char **argv) {
-    // -- 1. Argument parsing --------------------------------------------------
-    //
-    // Recognised flags:
-    //   --stdin            Force stdin mode even if a path is given.
-    //   --path <reported>  Path string to put in the JSON "path" field
-    //                      (handy when feeding stdin but reporting the
-    //                      original source file name). Also used as the
-    //                      preferred directory for the stdin temp file and
-    //                      as an INCLUDE search directory.
-    //   -I <dir>           Extra directory for Fortran INCLUDE resolution
-    //                      (mirrors the translator's -I / include_dirs).
-    //   <path>             Bare positional - source file to parse.
-    //
-    // Anything starting with a `-` we don't recognise is fatal (exit 2);
-    // anything else is taken as the input path.
-    std::string path;
-    bool readStdin = false;
-    bool emitTiming = false;
-    std::string originalPath; // reported in JSON "path" field
-    std::vector<std::string> includeDirs;
-
-    for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
-        if (a == "--stdin") {
-            readStdin = true;
-        } else if (a == "--timing") {
-            emitTiming = true;
-        } else if (a == "--path" && i + 1 < argc) {
-            originalPath = argv[++i];
-        } else if (a == "-I" && i + 1 < argc) {
-            includeDirs.push_back(argv[++i]);
-        } else if (a.rfind("-I", 0) == 0 && a.size() > 2) {
-            // accept -Idir as well as -I dir
-            includeDirs.push_back(a.substr(2));
-        } else if (a.size() > 0 && a[0] != '-') {
-            path = a;
-        } else {
-            std::cerr << "op2-flang-scan: unknown argument: " << a << "\n";
-            return 2;
+// Escape a string for embedding in a tiny hand-rolled JSON error object.
+static std::string jsonEscape(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default: out += c; break;
         }
     }
+    return out;
+}
 
-    const auto tMain = Clock::now();
-
-    // -- 2. Materialise stdin to a temp file if needed ------------------------
-    //
-    // Prefer the directory of --path so Flang's INCLUDE search (directory of
-    // the file being scanned) finds sibling .inc files. Also record that
-    // directory for options.searchDirectories below as a second line of
-    // defence when the temp file has to live under /tmp instead.
+// Parse one translation unit and write one JSON object (plus newline) to
+// stdout. `sourceBytes` non-empty means materialise that text to a temp file
+// next to `reportedPath`; otherwise read `onDiskPath` from disk.
+//
+// Returns 0 on success, 1 on parse failure. On failure still emits a JSON
+// object with an "error" field so --batch callers can fall back per file.
+static int scanOneUnit(const std::string &reportedPath,
+                       const std::string &onDiskPath,
+                       const std::string &sourceBytes,
+                       const std::vector<std::string> &includeDirs,
+                       bool emitTiming,
+                       int tempSuffix,
+                       Clock::time_point tSession0) {
+    const auto tUnit = Clock::now();
+    std::string path = onDiskPath;
+    std::string originalPath = reportedPath.empty() ? onDiskPath : reportedPath;
+    std::string sourceDir = parentDirOf(originalPath);
     std::string tempFile;
-    std::string sourceDir = parentDirOf(originalPath.empty() ? path : originalPath);
     double materializeMs = 0.0;
-    if (readStdin || path.empty()) {
+
+    if (!sourceBytes.empty()) {
         const auto t0 = Clock::now();
-        std::string body = slurpStdin();
-        tempFile = writeTempFile(body, sourceDir);
+        tempFile = writeTempFile(sourceBytes, sourceDir, tempSuffix);
         path = tempFile;
         materializeMs = msSince(t0);
     }
-    if (originalPath.empty()) originalPath = path;
+    if (originalPath.empty()) {
+        originalPath = path;
+    }
     if (sourceDir.empty()) {
         sourceDir = parentDirOf(originalPath);
     }
 
-    // -- 3. Run Flang's parse pipeline ----------------------------------------
-    //
     // The Python driver hands us source that has already been run through an
     // external preprocessor (pcpp/fpp) and a free-form converter, so there
     // are no live #-directives for Flang's prescanner to process. We still
     // need Flang's prescanner to do the Fortran-specific work (line
     // continuations, fixed/free form selection, comment stripping, INCLUDE
     // expansion, etc.), which is what Parsing::Prescan does.
-    //
-    // AllSources owns all the byte buffers we read; AllCookedSources owns
-    // the post-prescan stream we hand to Parsing.
     fp::Options options;
     options.isFixedForm = false;
-
-    // INCLUDE search path: original source directory first, then any -I dirs
-    // from the translator (same set fparser2's FortranStringReader receives).
     if (!sourceDir.empty()) {
         options.searchDirectories.push_back(sourceDir);
     }
@@ -2457,55 +2434,206 @@ int main(int argc, char **argv) {
     parsing.Parse(llvm::errs());
     const double parseMs = msSince(tParse0);
 
-    // -- 4. Surface parse errors ----------------------------------------------
-    if (!parsing.messages().empty() && parsing.messages().AnyFatalError()) {
-        parsing.messages().Emit(llvm::errs(), cooked);
-        if (!tempFile.empty()) std::remove(tempFile.c_str());
+    auto emitError = [&](const std::string &msg) {
+        std::cout << "{\"path\":\"" << jsonEscape(originalPath)
+                  << "\",\"error\":\"" << jsonEscape(msg)
+                  << "\",\"events\":[]}\n";
+        std::cout.flush();
+        if (!tempFile.empty()) {
+            std::remove(tempFile.c_str());
+        }
         return 1;
-    }
+    };
 
+    if (!parsing.messages().empty() && parsing.messages().AnyFatalError()) {
+        // keep Flang's diagnostics on stderr for humans; JSON error for Python
+        parsing.messages().Emit(llvm::errs(), cooked);
+        return emitError("flang fatal parse error");
+    }
     if (!parsing.parseTree().has_value()) {
         llvm::errs() << "op2-flang-scan: no parse tree produced for " << path << "\n";
-        if (!tempFile.empty()) std::remove(tempFile.c_str());
-        return 1;
+        return emitError("no parse tree produced");
     }
 
     const fp::Program &program = *parsing.parseTree();
 
-    // -- 5. Walk the parse tree, building the JSON document -------------------
     const auto tEmit0 = Clock::now();
     Json json;
     json.beginObject();
-    json.key("path"); json.stringValue(originalPath);
-
+    json.key("path");
+    json.stringValue(originalPath);
     json.key("events");
     json.beginArray();
     Scanner scanner{json, cooked};
     fp::Walk(program, scanner);
     json.endArray();
-
     json.endObject();
     const std::string jsonOut = json.str();
     const double walkEmitMs = msSince(tEmit0);
 
-    // -- 6. Emit and clean up -------------------------------------------------
     const auto tWrite0 = Clock::now();
     std::cout << jsonOut << "\n";
     std::cout.flush();
     const double stdoutWriteMs = msSince(tWrite0);
 
-    if (!tempFile.empty()) std::remove(tempFile.c_str());
+    if (!tempFile.empty()) {
+        std::remove(tempFile.c_str());
+    }
 
     if (emitTiming) {
-        // machine-readable one-liner for the Python measurement harness
+        const double unitMs = msSince(tUnit);
         std::cerr << "OP2_FLANG_SCAN_TIMING"
                   << " materialize_ms=" << materializeMs
                   << " parse_ms=" << parseMs
                   << " walk_emit_ms=" << walkEmitMs
                   << " stdout_write_ms=" << stdoutWriteMs
-                  << " total_ms=" << msSince(tMain)
+                  << " total_ms=" << unitMs
                   << " json_bytes=" << jsonOut.size()
+                  << " path=" << originalPath
+                  << " session_ms=" << msSince(tSession0)
                   << "\n";
     }
     return 0;
+}
+
+// --batch stdin framing (UTF-8):
+//   OP2_FLANG_BATCH_V1\n
+//   then repeated:
+//     <reported_path>\n
+//     <nbytes>\n
+//     <exactly nbytes of source bytes>
+//   EOF ends the stream.
+static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTiming) {
+    const auto tSession0 = Clock::now();
+    std::string magic;
+    if (!std::getline(std::cin, magic)) {
+        std::cerr << "op2-flang-scan: --batch expected OP2_FLANG_BATCH_V1 header\n";
+        return 2;
+    }
+    if (!magic.empty() && magic.back() == '\r') {
+        magic.pop_back();
+    }
+    if (magic != "OP2_FLANG_BATCH_V1") {
+        std::cerr << "op2-flang-scan: bad batch magic: " << magic << "\n";
+        return 2;
+    }
+
+    int failures = 0;
+    int unitIndex = 0;
+    while (true) {
+        std::string reportedPath;
+        if (!std::getline(std::cin, reportedPath)) {
+            break; // clean EOF between units
+        }
+        if (!reportedPath.empty() && reportedPath.back() == '\r') {
+            reportedPath.pop_back();
+        }
+        std::string nbytesLine;
+        if (!std::getline(std::cin, nbytesLine)) {
+            std::cerr << "op2-flang-scan: truncated batch unit header for "
+                      << reportedPath << "\n";
+            return 2;
+        }
+        if (!nbytesLine.empty() && nbytesLine.back() == '\r') {
+            nbytesLine.pop_back();
+        }
+        std::size_t nbytes = 0;
+        try {
+            nbytes = static_cast<std::size_t>(std::stoull(nbytesLine));
+        } catch (...) {
+            std::cerr << "op2-flang-scan: bad nbytes in batch stream: "
+                      << nbytesLine << "\n";
+            return 2;
+        }
+        std::string body(nbytes, '\0');
+        std::size_t got = 0;
+        while (got < nbytes) {
+            std::cin.read(&body[got], static_cast<std::streamsize>(nbytes - got));
+            std::streamsize n = std::cin.gcount();
+            if (n <= 0) {
+                break;
+            }
+            got += static_cast<std::size_t>(n);
+        }
+        if (got != nbytes) {
+            std::cerr << "op2-flang-scan: truncated batch body for "
+                      << reportedPath << "\n";
+            return 2;
+        }
+        if (scanOneUnit(reportedPath, /*onDiskPath=*/{}, body, includeDirs,
+                        emitTiming, unitIndex++, tSession0) != 0) {
+            ++failures;
+        }
+    }
+
+    if (emitTiming) {
+        std::cerr << "OP2_FLANG_SCAN_BATCH_DONE"
+                  << " units=" << unitIndex
+                  << " failures=" << failures
+                  << " session_ms=" << msSince(tSession0)
+                  << "\n";
+    }
+    // non-zero only if every unit failed (partial success still exit 0 so
+    // Python can apply per-file fparser2 fallback from JSON "error" fields)
+    return (unitIndex > 0 && failures == unitIndex) ? 1 : 0;
+}
+
+// Entry point. Steps performed:
+//
+//   1. Argument parsing.
+//   2. Either --batch (multi-unit stdin protocol) or single-unit mode.
+//   3. For each unit: materialise if needed, Prescan+Parse, walk, emit JSON.
+int main(int argc, char **argv) {
+    // Recognised flags:
+    //   --stdin            Force stdin mode even if a path is given.
+    //   --batch            Multi-unit stdin protocol (see runBatchMode).
+    //   --path <reported>  Path string to put in the JSON "path" field
+    //                      (handy when feeding stdin but reporting the
+    //                      original source file name). Also used as the
+    //                      preferred directory for the stdin temp file and
+    //                      as an INCLUDE search directory.
+    //   -I <dir>           Extra directory for Fortran INCLUDE resolution
+    //                      (mirrors the translator's -I / include_dirs).
+    //   <path>             Bare positional - source file to parse.
+    std::string path;
+    bool readStdin = false;
+    bool batchMode = false;
+    bool emitTiming = false;
+    std::string originalPath;
+    std::vector<std::string> includeDirs;
+
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--stdin") {
+            readStdin = true;
+        } else if (a == "--batch") {
+            batchMode = true;
+        } else if (a == "--timing") {
+            emitTiming = true;
+        } else if (a == "--path" && i + 1 < argc) {
+            originalPath = argv[++i];
+        } else if (a == "-I" && i + 1 < argc) {
+            includeDirs.push_back(argv[++i]);
+        } else if (a.rfind("-I", 0) == 0 && a.size() > 2) {
+            includeDirs.push_back(a.substr(2));
+        } else if (a.size() > 0 && a[0] != '-') {
+            path = a;
+        } else {
+            std::cerr << "op2-flang-scan: unknown argument: " << a << "\n";
+            return 2;
+        }
+    }
+
+    const auto tSession0 = Clock::now();
+
+    if (batchMode) {
+        return runBatchMode(includeDirs, emitTiming);
+    }
+
+    std::string sourceBytes;
+    if (readStdin || path.empty()) {
+        sourceBytes = slurpStdin();
+    }
+    return scanOneUnit(originalPath, path, sourceBytes, includeDirs, emitTiming,
+                       /*tempSuffix=*/0, tSession0);
 }

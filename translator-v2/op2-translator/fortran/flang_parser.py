@@ -98,34 +98,127 @@ def run_scan(
 
     ``include_dirs`` are forwarded as ``-I`` so Flang can resolve Fortran
     ``INCLUDE`` the same way fparser2's ``FortranStringReader`` does.
+
+    Prefer ``run_scan_batch`` when scanning multiple files in one translator
+    run — that amortises process spawn / LLVM binary load.
     """
-    cmd = [str(scan_bin), "--stdin", "--path", str(path)]
+    results = run_scan_batch([(path, source)], scan_bin, include_dirs=include_dirs)
+    data = results[path]
+    if data.get("error"):
+        raise ParseError(f"op2-flang-scan failed for {path}: {data['error']}")
+    return data
+
+
+def run_scan_batch(
+    units: List[Tuple[Path, str]],
+    scan_bin: Path,
+    include_dirs: Optional[Iterable[Path]] = None,
+) -> Dict[Path, Dict[str, Any]]:
+    """
+    Scan many preprocessed translation units in **one** op2-flang-scan process.
+
+    Uses ``--batch`` with the ``OP2_FLANG_BATCH_V1`` stdin framing. Each unit
+    still gets its own Flang Prescan+Parse (Flang has no multi-TU parse), but
+    LLVM load / process spawn happens once.
+
+    Returns a map from input ``Path`` to the per-file JSON document. Failed
+    units have an ``"error"`` string field instead of usable ``events``.
+    """
+    if not units:
+        return {}
+
+    # single-unit fast path keeps the historical --stdin CLI (and cwd hint)
+    if len(units) == 1:
+        path, source = units[0]
+        cmd = [str(scan_bin), "--stdin", "--path", str(path)]
+        for d in include_dirs or []:
+            cmd.extend(["-I", str(d)])
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=source.encode("utf-8"),
+                capture_output=True,
+                check=False,
+                cwd=str(path.parent) if path.parent else None,
+            )
+        except FileNotFoundError as e:
+            raise ParseError(f"failed to launch op2-flang-scan: {e}")
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="replace")
+            raise ParseError(
+                f"op2-flang-scan failed for {path} (exit {proc.returncode}):\n{stderr}"
+            )
+        try:
+            return {path: json.loads(proc.stdout.decode("utf-8", errors="replace"))}
+        except json.JSONDecodeError as e:
+            raise ParseError(f"op2-flang-scan produced invalid JSON for {path}: {e}")
+
+    cmd = [str(scan_bin), "--batch"]
     for d in include_dirs or []:
         cmd.extend(["-I", str(d)])
+
+    # OP2_FLANG_BATCH_V1 framing (see op2-flang-scan.cpp runBatchMode)
+    chunks: List[bytes] = [b"OP2_FLANG_BATCH_V1\n"]
+    path_by_reported: Dict[str, Path] = {}
+    for path, source in units:
+        reported = str(path)
+        path_by_reported[reported] = path
+        body = source.encode("utf-8")
+        chunks.append(reported.encode("utf-8") + b"\n")
+        chunks.append(str(len(body)).encode("ascii") + b"\n")
+        chunks.append(body)
+
     try:
         proc = subprocess.run(
             cmd,
-            input=source.encode("utf-8"),
+            input=b"".join(chunks),
             capture_output=True,
             check=False,
-            # cwd = source directory so relative INCLUDE also works if the
-            # scan binary has to fall back to a /tmp temp file
-            cwd=str(path.parent) if path.parent else None,
         )
     except FileNotFoundError as e:
         raise ParseError(f"failed to launch op2-flang-scan: {e}")
 
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode("utf-8", errors="replace")
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    stderr = proc.stderr.decode("utf-8", errors="replace")
+    results: Dict[Path, Dict[str, Any]] = {}
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            doc = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ParseError(
+                f"op2-flang-scan --batch produced invalid JSON line: {e}\n{line[:200]}"
+            )
+        reported = str(doc.get("path", ""))
+        key = path_by_reported.get(reported)
+        if key is None:
+            # fall back to matching by resolved path string
+            for p, _ in units:
+                if str(p) == reported:
+                    key = p
+                    break
+        if key is None:
+            raise ParseError(
+                f"op2-flang-scan --batch returned unexpected path: {reported!r}"
+            )
+        results[key] = doc
+
+    if len(results) != len(units):
+        missing = [str(p) for p, _ in units if p not in results]
         raise ParseError(
-            f"op2-flang-scan failed for {path} (exit {proc.returncode}):\n{stderr}"
+            f"op2-flang-scan --batch missing results for: {', '.join(missing)}\n"
+            f"stderr:\n{stderr}"
         )
 
-    stdout = proc.stdout.decode("utf-8", errors="replace")
-    try:
-        return json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise ParseError(f"op2-flang-scan produced invalid JSON for {path}: {e}")
+    if proc.returncode != 0 and all(r.get("error") for r in results.values()):
+        raise ParseError(
+            f"op2-flang-scan --batch failed for all units "
+            f"(exit {proc.returncode}):\n{stderr}"
+        )
+
+    return results
 
 
 # -----------------------------------------------------------------------------

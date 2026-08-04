@@ -118,6 +118,11 @@ Or via the shell wrapper:
 translator-v2/op2-translator.sh --parser flang airfoil.F90 -o generated/
 ```
 
+When multiple Fortran sources are passed, the Python driver invokes
+`op2-flang-scan --batch` once and feeds every preprocessed translation unit
+over stdin. Flang still runs `Prescan`+`Parse` **per file** (the API is
+one TU per call), but LLVM binary load / process spawn happens only once.
+
 ## JSON format
 
 ```jsonc
