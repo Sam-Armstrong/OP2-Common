@@ -57,6 +57,46 @@ BATCH_DONE_RE = re.compile(
     r" session_ms=(?P<session>[0-9.]+)"
 )
 
+# Frozen Stage-1 totals from before op2-flang-scan --batch (one cold
+# subprocess per source file). Used only for the batch-vs-per-file table.
+PER_FILE_BASELINE: Dict[str, Dict[str, float]] = {
+    "airfoil": {
+        "files": 3,
+        "wall_ms": 486.21,
+        "parse_ms": 289.14,
+        "spawn_ms": 120.71,
+        "fparser2_ms": 182.92,
+    },
+    "mesh_res": {
+        "files": 1,
+        "wall_ms": 172.01,
+        "parse_ms": 103.80,
+        "spawn_ms": 40.78,
+        "fparser2_ms": 94.83,
+    },
+    "tri_diff": {
+        "files": 1,
+        "wall_ms": 172.92,
+        "parse_ms": 103.86,
+        "spawn_ms": 41.70,
+        "fparser2_ms": 76.70,
+    },
+    "scale_mesh": {
+        "files": 10,
+        "wall_ms": 1732.65,
+        "parse_ms": 1022.59,
+        "spawn_ms": 400.58,
+        "fparser2_ms": 777.40,
+    },
+    "scale_mesh_flat": {
+        "files": 1,
+        "wall_ms": 259.83,
+        "parse_ms": 165.34,
+        "spawn_ms": 19.88,
+        "fparser2_ms": 713.42,
+    },
+}
+
 NCU_METRICS = [
     "dram__throughput.avg.pct_of_peak_sustained_elapsed",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
@@ -892,6 +932,61 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
         "the same preprocessed inputs."
     )
     lines.append("")
+    lines.append("### Batching vs per-file spawn")
+    lines.append("")
+    lines.append(
+        "Before `--batch`, Stage-1 launched a fresh `op2-flang-scan` for every "
+        "source file (~35–40 ms spawn/IPC each). Production now uses one "
+        "process and sequential Prescan→Parse→walk per TU. Per-file baselines "
+        "below are frozen from the pre-batch harness; batch columns are the "
+        "live measurements in the table above."
+    )
+    lines.append("")
+    lines.append(
+        "| Example | Files | Per-file wall (ms) | Batch wall (ms) | "
+        "Wall batch÷per-file | Per-file spawn (ms) | Batch spawn (ms) | "
+        "Per-file ÷ fparser2 | Batch ÷ fparser2 |"
+    )
+    lines.append(
+        "|---------|------:|-------------------:|----------------:|"
+        "--------------------:|--------------------:|-----------------:|"
+        "-------------------:|-------------------:|"
+    )
+    for s in stage1:
+        name = s["example"]
+        base = PER_FILE_BASELINE.get(name)
+        if not base:
+            continue
+        wall_b = s["app"]["wall_ms_mean"]
+        spawn_b = s["breakdown"]["subprocess_spawn_ipc_ms"]
+        fp_b = s["fparser2_parse_ms_mean"]
+        wall_p = base["wall_ms"]
+        spawn_p = base["spawn_ms"]
+        fp_p = base["fparser2_ms"]
+        lines.append(
+            f"| {name} "
+            f"| {int(base['files'])} "
+            f"| {wall_p:.1f} "
+            f"| {wall_b:.1f} "
+            f"| {wall_b / wall_p:.2f}× "
+            f"| {spawn_p:.1f} "
+            f"| {spawn_b:.1f} "
+            f"| {wall_p / fp_p:.2f}× "
+            f"| {wall_b / fp_b:.2f}× |"
+        )
+    lines.append("")
+    lines.append(
+        "Multi-file apps gain the most: `airfoil` drops from ~2.7× fparser2 "
+        "to ~1.1×; `scale_mesh` (10 files) from ~2.2× to **0.53×** (Flang "
+        "faster). Single-file examples (`tri_diff`, `mesh_res`, "
+        "`scale_mesh_flat`) change little on spawn — they already paid only "
+        "one process hit — though `scale_mesh`’s LLVM parse also improved "
+        "under batch because one process avoids repeating fixed per-invocation "
+        "frontend setup across ten modules. True single Prescan+Parse over "
+        "many TUs remains impossible; batching only amortises process/LLVM "
+        "load."
+    )
+    lines.append("")
     # Flang vs fparser2 Stage-1 summary (from measured app totals)
     if stage1:
         llvm_ratios = []
@@ -1206,8 +1301,10 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
     lines.append("## Environment notes")
     lines.append("")
     lines.append(
-        "- Stage-1 timings use `op2-flang-scan --timing` (materialise / "
-        "Prescan+Parse / walk+JSON / stdout) plus Python wall/`json.loads`."
+        "- Stage-1 timings use `op2-flang-scan --batch --timing` "
+        "(materialise / Prescan+Parse / walk+JSON / stdout per TU in one "
+        "process) plus Python wall/`json.loads`. The batch-vs-per-file table "
+        "compares against frozen pre-batch totals in `PER_FILE_BASELINE`."
     )
     lines.append(
         "- Hardware counters via `ncu` need NVIDIA GPU Performance Counter "

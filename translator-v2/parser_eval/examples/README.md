@@ -30,6 +30,20 @@ For each example the Fortran sources are preprocessed once, then scanned with a 
 
 With `--batch`, spawn/IPC is paid **once per app** (~20–40 ms here), not once per file. Remaining non-parse cost is materialise + walk/JSON + `json.loads` (grows with fat kernel modules). fparser2 has no C++ subprocess; its column is pure in-process parse time for the same preprocessed inputs.
 
+### Batching vs per-file spawn
+
+Before `--batch`, Stage-1 launched a fresh `op2-flang-scan` for every source file (~35–40 ms spawn/IPC each). Production now uses one process and sequential Prescan→Parse→walk per TU. Per-file baselines below are frozen from the pre-batch harness; batch columns are the live measurements in the table above.
+
+| Example | Files | Per-file wall (ms) | Batch wall (ms) | Wall batch÷per-file | Per-file spawn (ms) | Batch spawn (ms) | Per-file ÷ fparser2 | Batch ÷ fparser2 |
+|---------|------:|-------------------:|----------------:|--------------------:|--------------------:|-----------------:|-------------------:|-------------------:|
+| airfoil | 3 | 486.2 | 210.7 | 0.43× | 120.7 | 41.5 | 2.66× | 1.13× |
+| mesh_res | 1 | 172.0 | 182.1 | 1.06× | 40.8 | 38.1 | 1.81× | 1.80× |
+| scale_mesh | 10 | 1732.7 | 399.9 | 0.23× | 400.6 | 21.6 | 2.23× | 0.53× |
+| scale_mesh_flat | 1 | 259.8 | 259.3 | 1.00× | 19.9 | 19.9 | 0.36× | 0.36× |
+| tri_diff | 1 | 172.9 | 170.8 | 0.99× | 41.7 | 37.2 | 2.25× | 1.59× |
+
+Multi-file apps gain the most: `airfoil` drops from ~2.7× fparser2 to ~1.1×; `scale_mesh` (10 files) from ~2.2× to **0.53×** (Flang faster). Single-file examples (`tri_diff`, `mesh_res`, `scale_mesh_flat`) change little on spawn — they already paid only one process hit — though `scale_mesh`’s LLVM parse also improved under batch because one process avoids repeating fixed per-invocation frontend setup across ten modules. True single Prescan+Parse over many TUs remains impossible; batching only amortises process/LLVM load.
+
 Overall, the Flang Stage-1 path is **mixed**: worse on airfoil, mesh_res, tri_diff, but **faster** on scale_mesh, scale_mesh_flat. LLVM Flang preprocess + parse vs fparser2: airfoil 0.68×, mesh_res 1.08×, scale_mesh 0.31×, scale_mesh_flat 0.22×, tri_diff 0.94×. Complete Flang pipeline vs fparser2: airfoil 1.13×, mesh_res 1.80×, scale_mesh 0.53×, scale_mesh_flat 0.36×, tri_diff 1.59×. Production Stage-1 now uses `op2-flang-scan --batch` so spawn/IPC is paid once per app.
 
 True multi-file `Prescan`+`Parse` in one Flang call is **not** possible (one translation unit per call). Batch mode runs Prescan→Parse→walk sequentially in **one process**, amortising LLVM binary load. fparser2 remains fully in-process with a lighter F2008-oriented AST. How the paths scale after batching:
@@ -77,6 +91,6 @@ _Runtime section skipped in this run._
 
 ## Environment notes
 
-- Stage-1 timings use `op2-flang-scan --timing` (materialise / Prescan+Parse / walk+JSON / stdout) plus Python wall/`json.loads`.
+- Stage-1 timings use `op2-flang-scan --batch --timing` (materialise / Prescan+Parse / walk+JSON / stdout per TU in one process) plus Python wall/`json.loads`. The batch-vs-per-file table compares against frozen pre-batch totals in `PER_FILE_BASELINE`.
 - Hardware counters via `ncu` need NVIDIA GPU Performance Counter access (often blocked in WSL: `ERR_NVGPUCTRPERM`). The harness then falls back to the algorithmic model in `measure_performance.py`.
 - Raw numbers are written to `performance_results.json` beside this README.
