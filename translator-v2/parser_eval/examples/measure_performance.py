@@ -786,21 +786,27 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
         "For each example the Fortran sources are preprocessed once, then "
         "`op2-flang-scan --timing` is invoked per file (warmup discarded). "
         "Times below are **app totals** (sum over source files), mean of "
-        "timed runs."
+        "timed runs. **Complete Flang pipeline** is the Python-observed wall "
+        "(spawn through `json.loads`); **LLVM Flang preprocess + parse** is "
+        "only `Parsing::Prescan` + `Parse` inside the C++ binary."
     )
     lines.append("")
     lines.append(
-        "| Example | Flang parse | JSON walk+emit | `json.loads` | "
-        "spawn/IPC | materialise | parse ÷ wall | fparser2 parse |"
+        "| Example | Complete Flang pipeline | LLVM Flang preprocess + parse | "
+        "JSON walk+emit | `json.loads` | spawn/IPC | materialise | "
+        "LLVM ÷ complete | fparser2 parse |"
     )
     lines.append(
-        "|---------|------------:|---------------:|-------------:|"
-        "----------:|------------:|-------------:|---------------:|"
+        "|---------|------------------------:|------------------------------:|"
+        "---------------:|-------------:|----------:|------------:|"
+        "----------------:|---------------:|"
     )
     for s in stage1:
         b = s["breakdown"]
+        a = s["app"]
         lines.append(
             f"| {s['example']} "
+            f"| {a['wall_ms_mean']:.2f} "
             f"| {b['flang_parse_ms']:.2f} "
             f"| {b['json_serialize_walk_ms']:.2f} "
             f"| {b['json_deserialize_ms']:.2f} "
@@ -817,11 +823,12 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
         ratio = b["overhead_over_parse_ratio"] or 0.0
         frac = 100.0 * (b["parse_fraction_of_wall"] or 0.0)
         lines.append(
-            f"- **{s['example']}**: Flang parse is {b['flang_parse_ms']:.2f} ms "
-            f"({frac:.1f}% of Python-observed wall). Non-parse overhead "
+            f"- **{s['example']}**: LLVM Flang preprocess + parse is "
+            f"{b['flang_parse_ms']:.2f} ms "
+            f"({frac:.1f}% of the complete Flang pipeline). Non-parse overhead "
             f"(materialise + walk/JSON emit + spawn/IPC + `json.loads`) is "
             f"{b['non_parse_overhead_ms']:.2f} ms "
-            f"({ratio:.2f}× the parse time)."
+            f"({ratio:.2f}× that LLVM time)."
         )
     lines.append("")
     lines.append(
@@ -830,10 +837,80 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
         "is a few–fourteen milliseconds per app; Python `json.loads` is "
         "sub-millisecond to ~1 ms. Materialising stdin to a temp file is "
         "a few milliseconds. Combined non-parse overhead is about half of "
-        "parse time (~0.5×). fparser2 has no C++ subprocess; its column is "
-        "pure in-process parse time for the same preprocessed inputs."
+        "the LLVM parse time (~0.5×). fparser2 has no C++ subprocess; its "
+        "column is pure in-process parse time for the same preprocessed inputs."
     )
     lines.append("")
+    # Flang vs fparser2 Stage-1 summary (from measured app totals)
+    if stage1:
+        llvm_ratios = []
+        pipe_ratios = []
+        for s in stage1:
+            fp = s["fparser2_parse_ms_mean"]
+            if fp <= 0:
+                continue
+            llvm_ratios.append(
+                (s["example"], s["breakdown"]["flang_parse_ms"] / fp)
+            )
+            pipe_ratios.append(
+                (s["example"], s["app"]["wall_ms_mean"] / fp)
+            )
+        if llvm_ratios and pipe_ratios:
+            llvm_bits = ", ".join(
+                f"{name} {r:.2f}×" for name, r in llvm_ratios
+            )
+            pipe_bits = ", ".join(
+                f"{name} {r:.2f}×" for name, r in pipe_ratios
+            )
+            lines.append(
+                "Overall, the Flang Stage-1 path is **worse** than fparser2 "
+                "on these examples. LLVM Flang preprocess + parse alone is "
+                f"already similar to or slower than fparser2 ({llvm_bits}). "
+                "The complete Flang pipeline is substantially slower still "
+                f"({pipe_bits} fparser2) because each source file pays a cold "
+                "subprocess spawn/IPC tax that fparser2 never incurs."
+            )
+            lines.append("")
+            lines.append(
+                "That gap is mostly architecture, not “C++ vs Python.” Flang "
+                "Stage-1 is a cold out-of-process pipeline per source file "
+                "(spawn a large LLVM-linked binary, materialise, Prescan/Parse, "
+                "walk+JSON, deserialise), while fparser2 parses in-process with "
+                "a lighter F2008-oriented AST. Even the LLVM Prescan+Parse "
+                "slice alone can lose to fparser2 because Flang does more "
+                "frontend work (cooked sources, INCLUDE, provenance, full "
+                "messages) than OP2 needs. How the two paths should scale "
+                "with program shape:"
+            )
+            lines.append("")
+            lines.append("| Scaling driver | Flang path | fparser2 path |")
+            lines.append("|---|---|---|")
+            lines.append(
+                "| **# of source files** | Bad: ~fixed spawn/IPC **per file** | "
+                "Mostly linear in parse work only |"
+            )
+            lines.append(
+                "| **Total Fortran size / AST size** | Both grow "
+                "(parse is ~O(source/AST)) | Same |"
+            )
+            lines.append(
+                "| **# / size of kernels** (in same files) | Parse grows; "
+                "**walk+JSON** grows with extracted kernel text / OP2 events | "
+                "Parse grows; no JSON, but still walks/builds ASTs in Python |"
+            )
+            lines.append(
+                "| **Very large single-file apps** | Spawn amortises; LLVM "
+                "parse may catch up or win | Stays competitive if AST work "
+                "stays lighter |"
+            )
+            lines.append("")
+            lines.append(
+                "So many small files favour fparser2 (spawn dominates); few "
+                "large files shrink Flang’s relative penalty; many kernels in "
+                "one file mainly hurt both through source/AST size, with JSON "
+                "emit still a small slice on these examples."
+            )
+            lines.append("")
     lines.append("## Runtime equivalence (`c_cuda`)")
     lines.append("")
     if not runtime:

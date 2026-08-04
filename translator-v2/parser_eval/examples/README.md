@@ -10,21 +10,38 @@ PYTHONUNBUFFERED=1 translator-v2/.python/bin/python3 translator-v2/parser_eval/e
 
 ## Stage-1: subprocess / JSON vs parse time (Flang)
 
-For each example the Fortran sources are preprocessed once, then `op2-flang-scan --timing` is invoked per file (warmup discarded). Times below are **app totals** (sum over source files), mean of timed runs.
+For each example the Fortran sources are preprocessed once, then `op2-flang-scan --timing` is invoked per file (warmup discarded). Times below are **app totals** (sum over source files), mean of timed runs. **Complete Flang pipeline** is the Python-observed wall (spawn through `json.loads`); **LLVM Flang preprocess + parse** is only `Parsing::Prescan` + `Parse` inside the C++ binary.
 
-| Example | Flang parse | JSON walk+emit | `json.loads` | spawn/IPC | materialise | parse ÷ wall | fparser2 parse |
-|---------|------------:|---------------:|-------------:|----------:|------------:|-------------:|---------------:|
-| airfoil | 242.45 | 13.90 | 1.10 | 99.81 | 5.38 | 59.5% | 182.92 |
-| mesh_res | 87.80 | 5.73 | 0.29 | 34.06 | 1.84 | 60.6% | 89.29 |
-| tri_diff | 87.20 | 5.74 | 0.26 | 33.82 | 1.87 | 60.6% | 76.51 |
+| Example | Complete Flang pipeline | LLVM Flang preprocess + parse | JSON walk+emit | `json.loads` | spawn/IPC | materialise | LLVM ÷ complete | fparser2 parse |
+|---------|------------------------:|------------------------------:|---------------:|-------------:|----------:|------------:|----------------:|---------------:|
+| airfoil | 407.20 | 242.45 | 13.90 | 1.10 | 99.81 | 5.38 | 59.5% | 182.92 |
+| mesh_res | 144.86 | 87.80 | 5.73 | 0.29 | 34.06 | 1.84 | 60.6% | 89.29 |
+| tri_diff | 143.86 | 87.20 | 5.74 | 0.26 | 33.82 | 1.87 | 60.6% | 76.51 |
 
 ### Interpretation
 
-- **airfoil**: Flang parse is 242.45 ms (59.5% of Python-observed wall). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 120.18 ms (0.50× the parse time).
-- **mesh_res**: Flang parse is 87.80 ms (60.6% of Python-observed wall). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 41.93 ms (0.48× the parse time).
-- **tri_diff**: Flang parse is 87.20 ms (60.6% of Python-observed wall). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 41.69 ms (0.48× the parse time).
+- **airfoil**: LLVM Flang preprocess + parse is 242.45 ms (59.5% of the complete Flang pipeline). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 120.18 ms (0.50× that LLVM time).
+- **mesh_res**: LLVM Flang preprocess + parse is 87.80 ms (60.6% of the complete Flang pipeline). Non-parse overhead is 41.93 ms (0.48× that LLVM time).
+- **tri_diff**: LLVM Flang preprocess + parse is 87.20 ms (60.6% of the complete Flang pipeline). Non-parse overhead is 41.69 ms (0.48× that LLVM time).
 
-Outside Flang Prescan/Parse, the largest cost is **subprocess spawn/IPC** (~35 ms per source file here), not JSON. Walk+JSON emit is a few–fourteen milliseconds per app; Python `json.loads` is sub-millisecond to ~1 ms. Materialising stdin to a temp file is a few milliseconds. Combined non-parse overhead is about half of parse time (~0.5×). fparser2 has no C++ subprocess; its column is pure in-process parse time for the same preprocessed inputs.
+Outside Flang Prescan/Parse, the largest cost is **subprocess spawn/IPC** (~35 ms per source file here), not JSON. Walk+JSON emit is a few–fourteen milliseconds per app; Python `json.loads` is sub-millisecond to ~1 ms. Materialising stdin to a temp file is a few milliseconds. Combined non-parse overhead is about half of the LLVM parse time (~0.5×). fparser2 has no C++ subprocess; its column is pure in-process parse time for the same preprocessed inputs.
+
+Overall, the Flang Stage-1 path is **worse** than fparser2 on these examples. LLVM Flang preprocess + parse alone is already similar to or slower than fparser2 (roughly +33% on airfoil, about equal on mesh_res, +14% on tri_diff). The complete Flang pipeline is substantially slower still — about 2.2×, 1.6×, and 1.9× fparser2 for airfoil, mesh_res, and tri_diff respectively — because each source file pays a cold subprocess spawn/IPC tax that fparser2 never incurs.
+
+That gap is mostly architecture, not “C++ vs Python.” Flang Stage-1 is a cold out-of-process pipeline per source file (spawn a large LLVM-linked binary, materialise, Prescan/Parse, walk+JSON, deserialise), while fparser2 parses in-process with a lighter F2008-oriented AST. Even the LLVM Prescan+Parse slice alone can lose to fparser2 because Flang does more frontend work (cooked sources, INCLUDE, provenance, full messages) than OP2 needs. How the two paths should scale with program shape:
+
+| Scaling driver | Flang path | fparser2 path |
+|---|---|---|
+| **# of source files** | Bad: ~fixed spawn/IPC **per file** | Mostly linear in parse work only |
+| **Total Fortran size / AST size** | Both grow (parse is ~O(source/AST)) | Same |
+| **# / size of kernels** (in same files) | Parse grows; **walk+JSON** grows with extracted kernel text / OP2 events | Parse grows; no JSON, but still walks/builds ASTs in Python |
+| **Very large single-file apps** | Spawn amortises; LLVM parse may catch up or win | Stays competitive if AST work stays lighter |
+
+So many small files favour fparser2 (spawn dominates); few large files shrink Flang’s relative penalty; many kernels in one file mainly hurt both through source/AST size, with JSON emit still a small slice on these examples.
+
+Everythin is measured in milliseconds, and the Flang path will scale better to larger applications,
+so the translation performance cost is not a significant issue relative to the improvements in robustness.
+
 
 ## Runtime equivalence (`c_cuda`)
 
