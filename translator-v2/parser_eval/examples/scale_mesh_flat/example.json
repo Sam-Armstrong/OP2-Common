@@ -1,0 +1,28 @@
+{
+  "name": "scale_mesh_flat",
+  "description": "Single-file twin of scale_mesh: same fat kernels in one program unit (CONTAINS) for spawn-amortisation comparison",
+  "workdir": ".",
+  "sources": [
+    "scale_mesh_flat.F90"
+  ],
+  "translator_flags": [],
+  "targets": [
+    "seq",
+    "openmp",
+    "c_cuda"
+  ],
+  "app_name": "scale_mesh_flat",
+  "runtime": {
+    "variant": "c_cuda",
+    "make_target": "scale_mesh_flat_c_cuda",
+    "binary": "./scale_mesh_flat_c_cuda",
+    "args": [
+      "OP_PART_SIZE=128",
+      "OP_BLOCK_SIZE=192"
+    ],
+    "pass_regex": "Test PASSED",
+    "timeout_s": 180,
+    "runtime_ratio_tol": 0.5
+  },
+  "codegen_timeout_s": 300
+}

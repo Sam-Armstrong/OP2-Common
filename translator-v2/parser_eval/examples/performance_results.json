@@ -383,6 +383,60 @@
       }
     },
     {
+      "example": "scale_mesh_flat",
+      "runs": 5,
+      "files": [
+        {
+          "file": "scale_mesh_flat.F90",
+          "n": 5,
+          "wall_ms_mean": 259.82741699554026,
+          "wall_ms_std": 5.86513064927694,
+          "parse_ms_mean": 165.3392,
+          "parse_ms_std": 4.570019934311013,
+          "walk_emit_ms_mean": 28.35152,
+          "walk_emit_ms_std": 0.7196678414379795,
+          "json_loads_ms_mean": 24.247533176094294,
+          "json_loads_ms_std": 7.709111094079009,
+          "spawn_ipc_ms_mean": 19.878683819445968,
+          "spawn_ipc_ms_std": 7.501337624155261,
+          "materialize_ms_mean": 3.536844,
+          "materialize_ms_std": 0.22230740435262164,
+          "scan_total_ms_mean": 215.7012,
+          "scan_total_ms_std": 4.701995555080838,
+          "json_bytes_mean": 1721289.0,
+          "json_bytes_std": 0.0
+        }
+      ],
+      "app": {
+        "wall_ms_mean": 259.82741699554026,
+        "wall_ms_std": 5.86513064927694,
+        "parse_ms_mean": 165.3392,
+        "parse_ms_std": 4.570019934311013,
+        "walk_emit_ms_mean": 28.35152,
+        "walk_emit_ms_std": 0.7196678414379795,
+        "json_loads_ms_mean": 24.247533176094294,
+        "json_loads_ms_std": 7.709111094079009,
+        "spawn_ipc_ms_mean": 19.878683819445968,
+        "spawn_ipc_ms_std": 7.501337624155261,
+        "materialize_ms_mean": 3.536844,
+        "materialize_ms_std": 0.22230740435262164,
+        "scan_total_ms_mean": 215.7012,
+        "scan_total_ms_std": 4.701995555080838
+      },
+      "fparser2_parse_ms_mean": 713.4230577619746,
+      "fparser2_parse_ms_std": 10.56658073970895,
+      "breakdown": {
+        "flang_parse_ms": 165.3392,
+        "json_serialize_walk_ms": 28.35152,
+        "json_deserialize_ms": 24.247533176094294,
+        "subprocess_spawn_ipc_ms": 19.878683819445968,
+        "stdin_materialize_ms": 3.536844,
+        "non_parse_overhead_ms": 76.01458099554026,
+        "overhead_over_parse_ratio": 0.45974929717538404,
+        "parse_fraction_of_wall": 0.6363423918532736
+      }
+    },
+    {
       "example": "tri_diff",
       "runs": 5,
       "files": [
@@ -615,6 +669,68 @@
             "effective_bandwidth_gbs": 9.165233271117911,
             "dram_bandwidth_util_pct": 1.2059517461997251,
             "throughput_gflops": 94.09130618374404,
+            "note": "Derived from example mesh sizes / kernel burn loops and measured wall time. Used when Nsight Compute counters are unavailable (common under WSL: ERR_NVGPUCTRPERM)."
+          },
+          "ncu": {
+            "skipped": true
+          }
+        }
+      },
+      "wall_repeats": 2
+    },
+    {
+      "example": "scale_mesh_flat",
+      "parsers": {
+        "fparser2": {
+          "wall_s": 62.05109351151623,
+          "wall_s_std": 0.0023658795907530025,
+          "wall_samples_s": [
+            62.05276644101832,
+            62.049420582014136
+          ],
+          "source": "algorithmic_model",
+          "dram_bandwidth_util_pct": 1.200120671300968,
+          "sm_throughput_pct": null,
+          "arithmetic_intensity_flop_per_byte": 10.266111445330125,
+          "throughput_gflops": 93.63635145159307,
+          "effective_bandwidth_gbs": 9.120917101887358,
+          "algorithmic": {
+            "method": "algorithmic_model",
+            "peak_dram_gbs": 760.0,
+            "total_flops": 5810238000000.0,
+            "total_bytes": 565962880000.0,
+            "arithmetic_intensity_flop_per_byte": 10.266111445330125,
+            "effective_bandwidth_gbs": 9.120917101887358,
+            "dram_bandwidth_util_pct": 1.200120671300968,
+            "throughput_gflops": 93.63635145159307,
+            "note": "Derived from example mesh sizes / kernel burn loops and measured wall time. Used when Nsight Compute counters are unavailable (common under WSL: ERR_NVGPUCTRPERM)."
+          },
+          "ncu": {
+            "skipped": true
+          }
+        },
+        "flang": {
+          "wall_s": 62.11348613345763,
+          "wall_s_std": 0.09717649906620937,
+          "wall_samples_s": [
+            62.18220029491931,
+            62.04477197199594
+          ],
+          "source": "algorithmic_model",
+          "dram_bandwidth_util_pct": 1.198915157329853,
+          "sm_throughput_pct": null,
+          "arithmetic_intensity_flop_per_byte": 10.266111445330125,
+          "throughput_gflops": 93.54229430169268,
+          "effective_bandwidth_gbs": 9.111755195706884,
+          "algorithmic": {
+            "method": "algorithmic_model",
+            "peak_dram_gbs": 760.0,
+            "total_flops": 5810238000000.0,
+            "total_bytes": 565962880000.0,
+            "arithmetic_intensity_flop_per_byte": 10.266111445330125,
+            "effective_bandwidth_gbs": 9.111755195706884,
+            "dram_bandwidth_util_pct": 1.198915157329853,
+            "throughput_gflops": 93.54229430169268,
             "note": "Derived from example mesh sizes / kernel burn loops and measured wall time. Used when Nsight Compute counters are unavailable (common under WSL: ERR_NVGPUCTRPERM)."
           },
           "ncu": {

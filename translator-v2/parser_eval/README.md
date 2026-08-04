@@ -21,6 +21,7 @@ Current examples (all unstructured-mesh style):
 - `tri_diff` — triangular cell mesh, edge→cell diffusion
 - `mesh_res` — edge residual with edge→node and edge→cell maps
 - `scale_mesh` — larger multi-file variant (~2.4k lines, 10 sources) for Stage-1 scaling
+- `scale_mesh_flat` — same fat kernels in one file (spawn-amortisation contrast)
 
 ## Adding an example
 

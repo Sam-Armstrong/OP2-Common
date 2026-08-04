@@ -1,6 +1,6 @@
 # Parser evaluation examples — performance notes
 
-Measurements for the unstructured-mesh examples (`airfoil`, `tri_diff`, `mesh_res`, plus the larger multi-file `scale_mesh`): Flang Stage-1 subprocess/JSON overhead versus parse time, and runtime equivalence of generated `c_cuda` binaries (bandwidth, throughput, arithmetic intensity).
+Measurements for the unstructured-mesh examples (`airfoil`, `tri_diff`, `mesh_res`, `scale_mesh`, `scale_mesh_flat`): Flang Stage-1 subprocess/JSON overhead versus parse time, and runtime equivalence of generated `c_cuda` binaries (bandwidth, throughput, arithmetic intensity).
 
 Reproduce with (WSL/Linux):
 
@@ -17,6 +17,7 @@ For each example the Fortran sources are preprocessed once, then `op2-flang-scan
 | airfoil | 486.21 | 289.14 | 16.19 | 1.11 | 120.71 | 6.45 | 59.5% | 182.92 |
 | mesh_res | 172.01 | 103.80 | 7.14 | 0.30 | 40.78 | 2.13 | 60.3% | 94.83 |
 | scale_mesh | 1732.65 | 1022.59 | 82.44 | 23.89 | 400.58 | 21.38 | 59.0% | 777.40 |
+| scale_mesh_flat | 259.83 | 165.34 | 28.35 | 24.25 | 19.88 | 3.54 | 63.6% | 713.42 |
 | tri_diff | 172.92 | 103.86 | 6.80 | 0.23 | 41.70 | 2.14 | 60.1% | 76.70 |
 
 ### Interpretation
@@ -24,13 +25,14 @@ For each example the Fortran sources are preprocessed once, then `op2-flang-scan
 - **airfoil**: LLVM Flang preprocess + parse is 289.14 ms (59.5% of the complete Flang pipeline). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 144.46 ms (0.50× that LLVM time).
 - **mesh_res**: LLVM Flang preprocess + parse is 103.80 ms (60.3% of the complete Flang pipeline). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 50.35 ms (0.49× that LLVM time).
 - **scale_mesh**: LLVM Flang preprocess + parse is 1022.59 ms (59.0% of the complete Flang pipeline). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 528.28 ms (0.52× that LLVM time).
+- **scale_mesh_flat**: LLVM Flang preprocess + parse is 165.34 ms (63.6% of the complete Flang pipeline). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 76.01 ms (0.46× that LLVM time).
 - **tri_diff**: LLVM Flang preprocess + parse is 103.86 ms (60.1% of the complete Flang pipeline). Non-parse overhead (materialise + walk/JSON emit + spawn/IPC + `json.loads`) is 50.88 ms (0.49× that LLVM time).
 
 Outside Flang Prescan/Parse, the largest cost is **subprocess spawn/IPC** (~35–40 ms per source file here), not JSON — though walk+JSON and `json.loads` grow with fat kernel modules (tens of milliseconds on `scale_mesh`). Combined non-parse overhead is about half of the LLVM parse time (~0.5×). fparser2 has no C++ subprocess; its column is pure in-process parse time for the same preprocessed inputs.
 
-Overall, the Flang Stage-1 path is **worse** than fparser2 on these examples. LLVM Flang preprocess + parse alone is already similar to or slower than fparser2 (airfoil 1.58×, mesh_res 1.09×, scale_mesh 1.32×, tri_diff 1.35×). The complete Flang pipeline is substantially slower still (airfoil 2.66×, mesh_res 1.81×, scale_mesh 2.23×, tri_diff 2.25× fparser2) because each source file pays a cold subprocess spawn/IPC tax that fparser2 never incurs.
+Overall, the Flang Stage-1 path is **mixed**: worse on airfoil, mesh_res, scale_mesh, tri_diff, but **faster** on scale_mesh_flat. LLVM Flang preprocess + parse vs fparser2: airfoil 1.58×, mesh_res 1.09×, scale_mesh 1.32×, scale_mesh_flat 0.23×, tri_diff 1.35×. Complete Flang pipeline vs fparser2: airfoil 2.66×, mesh_res 1.81×, scale_mesh 2.23×, scale_mesh_flat 0.36×, tri_diff 2.25×. Multi-file apps pay a cold subprocess spawn/IPC tax per source file that fparser2 never incurs; a large single-file app can amortise that and even beat fparser2 on wall time.
 
-That gap is mostly architecture, not “C++ vs Python.” Flang Stage-1 is a cold out-of-process pipeline per source file (spawn a large LLVM-linked binary, materialise, Prescan/Parse, walk+JSON, deserialise), while fparser2 parses in-process with a lighter F2008-oriented AST. Even the LLVM Prescan+Parse slice alone can lose to fparser2 because Flang does more frontend work (cooked sources, INCLUDE, provenance, full messages) than OP2 needs. How the two paths should scale with program shape:
+That gap is mostly architecture, not “C++ vs Python.” Flang Stage-1 is a cold out-of-process pipeline per source file (spawn a large LLVM-linked binary, materialise, Prescan/Parse, walk+JSON, deserialise), while fparser2 parses in-process with a lighter F2008-oriented AST. On small/multi-file inputs the LLVM Prescan+Parse slice alone can lose to fparser2 because Flang does more frontend work (and repeats fixed per-file cost). How the two paths should scale with program shape:
 
 | Scaling driver | Flang path | fparser2 path |
 |---|---|---|
@@ -57,7 +59,22 @@ so the translation performance cost is not a significant issue relative to the i
 | fparser2 parse (ms) | 76.7 | 777.4 | 10.14× |
 | Complete Flang ÷ fparser2 | 2.25× | 2.23× | — |
 
-In practice, growing **both** file count and AST size scales Flang’s complete pipeline roughly with the work: spawn/IPC grows ~linearly with files (9.6× for 10× files), and LLVM parse grows with the fat modules. fparser2 parse grows similarly with AST size, so the **complete Flang ÷ fparser2 ratio stays about 2×** rather than improving. Amortising Flang’s spawn tax needs larger **per-file** sources (or a long-lived scan process), not merely more files of similar size. Absolute Stage-1 cost remains milliseconds-to-seconds and is small next to robustness gains, but this suite does not show Flang becoming *relatively* cheaper than fparser2 as apps grow in file count.
+Growing **both** file count and AST size scales Flang’s complete pipeline roughly with the work: spawn/IPC grows ~linearly with files (9.6× for 10× files), and LLVM parse grows with the fat modules. fparser2 parse grows similarly with AST size, so the **complete Flang ÷ fparser2 ratio stays about 2×** rather than improving.
+
+### Multi-file vs single-file (`scale_mesh_flat`)
+
+`scale_mesh_flat` keeps the same fat kernel bodies in **1 source file** (program + `CONTAINS`) instead of `10` files. GPU work is unchanged.
+
+| Metric | scale_mesh (multi) | scale_mesh_flat | flat ÷ multi |
+|---|---:|---:|---:|
+| Source files | 10 | 1 | 0.10× |
+| Complete Flang pipeline (ms) | 1732.6 | 259.8 | 0.15× |
+| LLVM Flang preprocess + parse (ms) | 1022.6 | 165.3 | 0.16× |
+| spawn/IPC (ms) | 400.6 | 19.9 | 0.05× |
+| fparser2 parse (ms) | 777.4 | 713.4 | 0.92× |
+| Complete Flang ÷ fparser2 | 2.23× | 0.36× | — |
+
+Collapsing to one file cuts spawn/IPC to a single ~20 ms hit (vs ~401 ms across 10 files). LLVM Prescan+Parse also drops sharply (165 vs 1023 ms): Flang pays substantial **per-file** frontend cost when the same kernel mass is split across modules, whereas one `CONTAINS` program unit is parsed once. fparser2 is nearly unchanged (713 vs 777 ms) because it is already in-process over similar total AST size. Net result: complete Flang ÷ fparser2 goes from 2.23× (multi) to 0.36× (flat) — Flang becomes **faster** than fparser2 when the large app is a single translation unit.
 
 ## Runtime equivalence (`c_cuda`)
 
@@ -71,6 +88,8 @@ Each example was translated with both parsers, built as `*_c_cuda`, and timed fo
 | mesh_res | flang | 25.126±0.114 | 32.2 | 4.23 | 123.7 | 3.843 | algorithmic_model |
 | scale_mesh | fparser2 | 61.421±0.005 | 9.2 | 1.21 | 94.6 | 10.266 | algorithmic_model |
 | scale_mesh | flang | 61.751±0.036 | 9.2 | 1.21 | 94.1 | 10.266 | algorithmic_model |
+| scale_mesh_flat | fparser2 | 62.051±0.002 | 9.1 | 1.20 | 93.6 | 10.266 | algorithmic_model |
+| scale_mesh_flat | flang | 62.113±0.097 | 9.1 | 1.20 | 93.5 | 10.266 | algorithmic_model |
 | tri_diff | fparser2 | 24.489±0.018 | 23.1 | 3.04 | 125.0 | 5.410 | algorithmic_model |
 | tri_diff | flang | 24.453±0.109 | 23.1 | 3.05 | 125.2 | 5.410 | algorithmic_model |
 
@@ -90,6 +109,11 @@ Each example was translated with both parsers, built as `*_c_cuda`, and timed fo
   - effective BW: flang=9.165, fparser2=9.214 (rel diff 0.53%)
   - BW util %: flang=1.206, fparser2=1.212 (rel diff 0.53%)
   - GFLOP/s: flang=94.09, fparser2=94.6 (rel diff 0.53%)
+  - AI: flang=10.27, fparser2=10.27 (rel diff 0.00%)
+- **scale_mesh_flat**: wall-clock relative difference 0.10% (flang=62.113s, fparser2=62.051s).
+  - effective BW: flang=9.112, fparser2=9.121 (rel diff 0.10%)
+  - BW util %: flang=1.199, fparser2=1.2 (rel diff 0.10%)
+  - GFLOP/s: flang=93.54, fparser2=93.64 (rel diff 0.10%)
   - AI: flang=10.27, fparser2=10.27 (rel diff 0.00%)
 - **tri_diff**: wall-clock relative difference 0.15% (flang=24.453s, fparser2=24.489s).
   - effective BW: flang=23.14, fparser2=23.11 (rel diff 0.15%)

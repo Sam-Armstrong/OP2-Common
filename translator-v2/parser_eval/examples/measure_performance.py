@@ -432,6 +432,12 @@ ALGORITHMIC: Dict[str, Dict[str, float]] = {
         "flops_per_iter": 10826200.0 * 700.0 + 7220000.0 * 100.0,
         "bytes_per_iter": 10826200.0 * 32.0 + 7220000.0 * 64.0,
     },
+    # identical GPU work to scale_mesh; only Stage-1 source layout differs
+    "scale_mesh_flat": {
+        "niter": 700.0,
+        "flops_per_iter": 10826200.0 * 700.0 + 7220000.0 * 100.0,
+        "bytes_per_iter": 10826200.0 * 32.0 + 7220000.0 * 64.0,
+    },
 }
 
 
@@ -777,9 +783,9 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
     lines.append("")
     lines.append(
         "Measurements for the unstructured-mesh examples "
-        "(`airfoil`, `tri_diff`, `mesh_res`, plus the larger multi-file "
-        "`scale_mesh`): Flang Stage-1 subprocess/JSON overhead versus parse "
-        "time, and runtime equivalence of generated `c_cuda` binaries "
+        "(`airfoil`, `tri_diff`, `mesh_res`, `scale_mesh`, "
+        "`scale_mesh_flat`): Flang Stage-1 subprocess/JSON overhead versus "
+        "parse time, and runtime equivalence of generated `c_cuda` binaries "
         "(bandwidth, throughput, arithmetic intensity)."
     )
     lines.append("")
@@ -875,13 +881,25 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
             pipe_bits = ", ".join(
                 f"{name} {r:.2f}×" for name, r in pipe_ratios
             )
+            worse = [n for n, r in pipe_ratios if r > 1.05]
+            better = [n for n, r in pipe_ratios if r < 0.95]
+            if better and worse:
+                verdict = (
+                    f"**mixed**: worse on {', '.join(worse)}, but **faster** "
+                    f"on {', '.join(better)}"
+                )
+            elif better:
+                verdict = f"**better** than fparser2 on {', '.join(better)}"
+            else:
+                verdict = "**worse** than fparser2 on these examples"
             lines.append(
-                "Overall, the Flang Stage-1 path is **worse** than fparser2 "
-                "on these examples. LLVM Flang preprocess + parse alone is "
-                f"already similar to or slower than fparser2 ({llvm_bits}). "
-                "The complete Flang pipeline is substantially slower still "
-                f"({pipe_bits} fparser2) because each source file pays a cold "
-                "subprocess spawn/IPC tax that fparser2 never incurs."
+                f"Overall, the Flang Stage-1 path is {verdict}. "
+                "LLVM Flang preprocess + parse vs fparser2: "
+                f"{llvm_bits}. Complete Flang pipeline vs fparser2: "
+                f"{pipe_bits}. Multi-file apps pay a cold subprocess "
+                "spawn/IPC tax per source file that fparser2 never incurs; "
+                "a large single-file app can amortise that and even beat "
+                "fparser2 on wall time."
             )
             lines.append("")
             lines.append(
@@ -889,11 +907,10 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                 "Stage-1 is a cold out-of-process pipeline per source file "
                 "(spawn a large LLVM-linked binary, materialise, Prescan/Parse, "
                 "walk+JSON, deserialise), while fparser2 parses in-process with "
-                "a lighter F2008-oriented AST. Even the LLVM Prescan+Parse "
-                "slice alone can lose to fparser2 because Flang does more "
-                "frontend work (cooked sources, INCLUDE, provenance, full "
-                "messages) than OP2 needs. How the two paths should scale "
-                "with program shape:"
+                "a lighter F2008-oriented AST. On small/multi-file inputs the "
+                "LLVM Prescan+Parse slice alone can lose to fparser2 because "
+                "Flang does more frontend work (and repeats fixed per-file "
+                "cost). How the two paths should scale with program shape:"
             )
             lines.append("")
             lines.append("| Scaling driver | Flang path | fparser2 path |")
@@ -930,18 +947,47 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                          "improvements in robustness.")
             lines.append("")
             by_ex = {s["example"]: s for s in stage1}
+
+            def _row(label: str, td: Dict[str, Any], sm: Dict[str, Any]) -> None:
+                td_files = len(td.get("files") or [])
+                sm_files = len(sm.get("files") or [])
+                td_wall = td["app"]["wall_ms_mean"]
+                sm_wall = sm["app"]["wall_ms_mean"]
+                td_llvm = td["breakdown"]["flang_parse_ms"]
+                sm_llvm = sm["breakdown"]["flang_parse_ms"]
+                td_spawn = td["breakdown"]["subprocess_spawn_ipc_ms"]
+                sm_spawn = sm["breakdown"]["subprocess_spawn_ipc_ms"]
+                td_fp = td["fparser2_parse_ms_mean"]
+                sm_fp = sm["fparser2_parse_ms_mean"]
+                lines.append(f"| Source files | {td_files} | {sm_files} | "
+                             f"{sm_files / max(td_files, 1):.1f}× |")
+                lines.append(
+                    f"| Complete Flang pipeline (ms) | {td_wall:.1f} | "
+                    f"{sm_wall:.1f} | {sm_wall / td_wall:.2f}× |"
+                )
+                lines.append(
+                    f"| LLVM Flang preprocess + parse (ms) | {td_llvm:.1f} | "
+                    f"{sm_llvm:.1f} | {sm_llvm / td_llvm:.2f}× |"
+                )
+                lines.append(
+                    f"| spawn/IPC (ms) | {td_spawn:.1f} | {sm_spawn:.1f} | "
+                    f"{sm_spawn / max(td_spawn, 1e-9):.2f}× |"
+                )
+                lines.append(
+                    f"| fparser2 parse (ms) | {td_fp:.1f} | {sm_fp:.1f} | "
+                    f"{sm_fp / td_fp:.2f}× |"
+                )
+                lines.append(
+                    f"| Complete Flang ÷ fparser2 | "
+                    f"{td_wall / td_fp:.2f}× | {sm_wall / sm_fp:.2f}× | — |"
+                )
+
             if "scale_mesh" in by_ex and "tri_diff" in by_ex:
                 sm, td = by_ex["scale_mesh"], by_ex["tri_diff"]
                 sm_files = len(sm.get("files") or [])
                 td_files = len(td.get("files") or [])
-                sm_wall = sm["app"]["wall_ms_mean"]
-                td_wall = td["app"]["wall_ms_mean"]
-                sm_llvm = sm["breakdown"]["flang_parse_ms"]
-                td_llvm = td["breakdown"]["flang_parse_ms"]
                 sm_spawn = sm["breakdown"]["subprocess_spawn_ipc_ms"]
                 td_spawn = td["breakdown"]["subprocess_spawn_ipc_ms"]
-                sm_fp = sm["fparser2_parse_ms_mean"]
-                td_fp = td["fparser2_parse_ms_mean"]
                 lines.append("### Scaling in practice (`scale_mesh`)")
                 lines.append("")
                 lines.append(
@@ -957,47 +1003,86 @@ def write_readme(path: Path, stage1: List[Dict[str, Any]], runtime: List[Dict[st
                     "| Metric | tri_diff | scale_mesh | scale ÷ tri |"
                 )
                 lines.append("|---|---:|---:|---:|")
-                lines.append(
-                    f"| Source files | {td_files} | {sm_files} | "
-                    f"{sm_files / max(td_files, 1):.1f}× |"
-                )
-                lines.append(
-                    f"| Complete Flang pipeline (ms) | {td_wall:.1f} | "
-                    f"{sm_wall:.1f} | {sm_wall / td_wall:.2f}× |"
-                )
-                lines.append(
-                    f"| LLVM Flang preprocess + parse (ms) | {td_llvm:.1f} | "
-                    f"{sm_llvm:.1f} | {sm_llvm / td_llvm:.2f}× |"
-                )
-                lines.append(
-                    f"| spawn/IPC (ms) | {td_spawn:.1f} | {sm_spawn:.1f} | "
-                    f"{sm_spawn / td_spawn:.2f}× |"
-                )
-                lines.append(
-                    f"| fparser2 parse (ms) | {td_fp:.1f} | {sm_fp:.1f} | "
-                    f"{sm_fp / td_fp:.2f}× |"
-                )
-                lines.append(
-                    f"| Complete Flang ÷ fparser2 | "
-                    f"{td_wall / td_fp:.2f}× | {sm_wall / sm_fp:.2f}× | — |"
-                )
+                _row("scale_mesh", td, sm)
                 lines.append("")
                 lines.append(
-                    "In practice, growing **both** file count and AST size "
-                    "scales Flang’s complete pipeline roughly with the work: "
+                    "Growing **both** file count and AST size scales Flang’s "
+                    "complete pipeline roughly with the work: "
                     f"spawn/IPC grows ~linearly with files "
                     f"({sm_spawn / td_spawn:.1f}× for "
                     f"{sm_files / max(td_files, 1):.0f}× files), "
                     "and LLVM parse grows with the fat modules. fparser2 parse "
                     "grows similarly with AST size, so the **complete Flang ÷ "
-                    "fparser2 ratio stays about 2×** rather than improving. "
-                    "Amortising Flang’s spawn tax needs larger **per-file** "
-                    "sources (or a long-lived scan process), not merely more "
-                    "files of similar size. Absolute Stage-1 cost remains "
-                    "milliseconds-to-seconds and is small next to robustness "
-                    "gains, but this suite does not show Flang becoming "
-                    "*relatively* cheaper than fparser2 as apps grow in file "
-                    "count."
+                    "fparser2 ratio stays about 2×** rather than improving."
+                )
+                lines.append("")
+
+            if "scale_mesh" in by_ex and "scale_mesh_flat" in by_ex:
+                sm = by_ex["scale_mesh"]
+                flat = by_ex["scale_mesh_flat"]
+                sm_files = len(sm.get("files") or [])
+                flat_files = len(flat.get("files") or [])
+                sm_wall = sm["app"]["wall_ms_mean"]
+                flat_wall = flat["app"]["wall_ms_mean"]
+                sm_llvm = sm["breakdown"]["flang_parse_ms"]
+                flat_llvm = flat["breakdown"]["flang_parse_ms"]
+                sm_spawn = sm["breakdown"]["subprocess_spawn_ipc_ms"]
+                flat_spawn = flat["breakdown"]["subprocess_spawn_ipc_ms"]
+                sm_fp = sm["fparser2_parse_ms_mean"]
+                flat_fp = flat["fparser2_parse_ms_mean"]
+                lines.append("### Multi-file vs single-file (`scale_mesh_flat`)")
+                lines.append("")
+                lines.append(
+                    f"`scale_mesh_flat` keeps the same fat kernel bodies in "
+                    f"**{flat_files} source file** (program + `CONTAINS`) "
+                    f"instead of `{sm_files}` files. GPU work is unchanged."
+                )
+                lines.append("")
+                lines.append(
+                    "| Metric | scale_mesh (multi) | scale_mesh_flat | flat ÷ multi |"
+                )
+                lines.append("|---|---:|---:|---:|")
+                lines.append(
+                    f"| Source files | {sm_files} | {flat_files} | "
+                    f"{flat_files / max(sm_files, 1):.2f}× |"
+                )
+                lines.append(
+                    f"| Complete Flang pipeline (ms) | {sm_wall:.1f} | "
+                    f"{flat_wall:.1f} | {flat_wall / sm_wall:.2f}× |"
+                )
+                lines.append(
+                    f"| LLVM Flang preprocess + parse (ms) | {sm_llvm:.1f} | "
+                    f"{flat_llvm:.1f} | {flat_llvm / sm_llvm:.2f}× |"
+                )
+                lines.append(
+                    f"| spawn/IPC (ms) | {sm_spawn:.1f} | {flat_spawn:.1f} | "
+                    f"{flat_spawn / max(sm_spawn, 1e-9):.2f}× |"
+                )
+                lines.append(
+                    f"| fparser2 parse (ms) | {sm_fp:.1f} | {flat_fp:.1f} | "
+                    f"{flat_fp / sm_fp:.2f}× |"
+                )
+                lines.append(
+                    f"| Complete Flang ÷ fparser2 | "
+                    f"{sm_wall / sm_fp:.2f}× | {flat_wall / flat_fp:.2f}× | — |"
+                )
+                lines.append("")
+                lines.append(
+                    "Collapsing to one file cuts spawn/IPC to a single "
+                    f"~{flat_spawn:.0f} ms hit "
+                    f"(vs ~{sm_spawn:.0f} ms across {sm_files} files). "
+                    f"LLVM Prescan+Parse also drops sharply "
+                    f"({flat_llvm:.0f} vs {sm_llvm:.0f} ms): Flang pays "
+                    "substantial **per-file** frontend cost when the same "
+                    "kernel mass is split across modules, whereas one "
+                    "`CONTAINS` program unit is parsed once. fparser2 is "
+                    f"nearly unchanged ({flat_fp:.0f} vs {sm_fp:.0f} ms) "
+                    "because it is already in-process over similar total "
+                    "AST size. Net result: complete Flang ÷ fparser2 goes "
+                    f"from {sm_wall / sm_fp:.2f}× (multi) to "
+                    f"{flat_wall / flat_fp:.2f}× (flat) — Flang becomes "
+                    "**faster** than fparser2 when the large app is a "
+                    "single translation unit."
                 )
                 lines.append("")
     lines.append("## Runtime equivalence (`c_cuda`)")
