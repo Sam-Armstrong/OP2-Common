@@ -55,6 +55,17 @@ True multi-file `Prescan`+`Parse` in one Flang call is **not** possible (one tra
 | **# / size of kernels** (in same files) | Parse grows; **walk+JSON** grows with extracted kernel text / OP2 events | Parse grows; no JSON, but still walks/builds ASTs in Python |
 | **Very large apps** | Batch + compiled frontend often beats fparser2 | Competitive on small TUs |
 
+
+### Downsides of batching
+
+- Not a true multi-file parse — still one Prescan+Parse per TU; you only save process/LLVM load.
+- Weaker failure isolation — a hard crash (segfault) in the scanner aborts the rest of the batch; with per-file spawn, later files would still run. Soft parse failures are fine: JSON "error" + per-file fparser2 fallback.
+- `-mp` disables batch — multiprocess parsing falls back to one subprocess per file (spawn tax returns).
+- Peak stdin memory — all preprocessed sources are sent in one payload (usually fine for OP2 apps).
+- Slightly noisier expected-fail path — single-file Flang failures can log “batch scan failed; falling back…” before the intended fail/fallback (seen on negative controls); behaviour is still correct.
+- Shared `-I` for the whole batch — same as the translator’s global include set today, so not a new restriction.
+
+
 ### Scaling in practice (`scale_mesh`)
 
 `scale_mesh` is a deliberately larger app: **10 source files / ~2.4k lines** of fat kernel modules versus `tri_diff`’s **1 file / ~200 lines**. Only one edge/cell kernel pair runs on the GPU (same mesh as `tri_diff`); the extra modules exist to inflate Stage-1 parse and per-file spawn cost.
