@@ -27,9 +27,9 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <process.h>     // _getpid on Windows (used to name the temp file)
+#include <process.h> // _getpid on Windows (used to name the temp file)
 #else
-#include <unistd.h>      // ::getpid on POSIX
+#include <unistd.h> // ::getpid on POSIX
 #endif
 
 // Short alias for the namespace we live in for 95 % of this file.
@@ -61,11 +61,31 @@ namespace fp = Fortran::parser;
  */
 class Json {
 public:
-    void beginObject() { comma(); out_ << "{"; first_.push_back(true); }
-    void endObject() { out_ << "}"; first_.pop_back(); markWrote(); }
+    void beginObject()
+    {
+        comma();
+        out_ << "{";
+        first_.push_back(true);
+    }
+    void endObject()
+    {
+        out_ << "}";
+        first_.pop_back();
+        markWrote();
+    }
 
-    void beginArray() { comma(); out_ << "["; first_.push_back(true); }
-    void endArray() { out_ << "]"; first_.pop_back(); markWrote(); }
+    void beginArray()
+    {
+        comma();
+        out_ << "[";
+        first_.push_back(true);
+    }
+    void endArray()
+    {
+        out_ << "]";
+        first_.pop_back();
+        markWrote();
+    }
 
     /**
      * @brief Emit "key":  Followed by exactly one value-emitting call.
@@ -74,7 +94,8 @@ public:
      * @see Json::comma
      * @see Json::markWrote
      */
-    void key(const std::string &k) {
+    void key(const std::string &k)
+    {
         comma();
         writeString(k);
         out_ << ":";
@@ -87,10 +108,30 @@ public:
         }
     }
 
-    void stringValue(const std::string &s) { comma(); writeString(s); markWrote(); }
-    void intValue(int64_t v) { comma(); out_ << v; markWrote(); }
-    void boolValue(bool b) { comma(); out_ << (b ? "true" : "false"); markWrote(); }
-    void nullValue() { comma(); out_ << "null"; markWrote(); }
+    void stringValue(const std::string &s)
+    {
+        comma();
+        writeString(s);
+        markWrote();
+    }
+    void intValue(int64_t v)
+    {
+        comma();
+        out_ << v;
+        markWrote();
+    }
+    void boolValue(bool b)
+    {
+        comma();
+        out_ << (b ? "true" : "false");
+        markWrote();
+    }
+    void nullValue()
+    {
+        comma();
+        out_ << "null";
+        markWrote();
+    }
 
     /**
      * @brief Splice in a pre-rendered JSON fragment verbatim (no quoting/escaping).
@@ -100,14 +141,22 @@ public:
      * @param jsonText Pre-rendered JSON fragment spliced in without quoting.
      * @see BodyCollector
      */
-    void rawValue(const std::string &jsonText) { comma(); out_ << jsonText; markWrote(); }
+    void rawValue(const std::string &jsonText)
+    {
+        comma();
+        out_ << jsonText;
+        markWrote();
+    }
 
     /**
      * @brief Snapshot of the buffer; safe to call once the top-level object/array has been closed.
      *
      * @return The accumulated JSON text.
      */
-    std::string str() const { return out_.str(); }
+    std::string str() const
+    {
+        return out_.str();
+    }
 
 private:
     /**
@@ -117,7 +166,8 @@ private:
      *
      * @see Json::markWrote
      */
-    void comma() {
+    void comma()
+    {
         if (!first_.empty()) {
             if (!first_.back()) {
                 out_ << ",";
@@ -133,7 +183,8 @@ private:
      *
      * @see Json::comma
      */
-    void markWrote() {
+    void markWrote()
+    {
         if (!first_.empty()) first_.back() = false;
     }
 
@@ -145,30 +196,41 @@ private:
      * @param s String contents to escape and quote.
      * @see jsonEscape
      */
-    void writeString(const std::string &s) {
+    void writeString(const std::string &s)
+    {
         out_ << '"';
         for (char c : s) {
             switch (c) {
-                case '"': out_ << "\\\""; break;
-                case '\\': out_ << "\\\\"; break;
-                case '\n': out_ << "\\n"; break;
-                case '\r': out_ << "\\r"; break;
-                case '\t': out_ << "\\t"; break;
-                default:
-                    if (static_cast<unsigned char>(c) < 0x20) {
-                        char buf[8];
-                        std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                        out_ << buf;
-                    } else {
-                        out_ << c;
-                    }
+            case '"':
+                out_ << "\\\"";
+                break;
+            case '\\':
+                out_ << "\\\\";
+                break;
+            case '\n':
+                out_ << "\\n";
+                break;
+            case '\r':
+                out_ << "\\r";
+                break;
+            case '\t':
+                out_ << "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    out_ << buf;
+                } else {
+                    out_ << c;
+                }
             }
         }
         out_ << '"';
     }
 
     std::ostringstream out_;
-    std::vector<bool> first_;   // depth-stack of "is the next slot the first?"
+    std::vector<bool> first_; // depth-stack of "is the next slot the first?"
 };
 
 /**
@@ -179,7 +241,8 @@ private:
  * @param s ASCII identifier to lower-case.
  * @return `s` with ASCII letters converted to lower case.
  */
-static std::string toLower(std::string s) {
+static std::string toLower(std::string s)
+{
     for (auto &c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
@@ -228,7 +291,8 @@ static std::string toLower(std::string s) {
  * @param src Cooked-source character range.
  * @return A copy of the cooked-source slice as `std::string`.
  */
-static std::string sourceText(fp::CharBlock src) {
+static std::string sourceText(fp::CharBlock src)
+{
     return src.ToString();
 }
 
@@ -258,7 +322,8 @@ static std::optional<int64_t> foldIntExpr(const fp::Expr &e);
  * @return The parsed integer, or nullopt if `text` is not an integer literal.
  * @see foldLiteralConstant
  */
-static std::optional<int64_t> parseIntText(const std::string &text) {
+static std::optional<int64_t> parseIntText(const std::string &text)
+{
     try {
         size_t pos = 0;
         long long v = std::stoll(text, &pos);
@@ -279,8 +344,8 @@ static std::optional<int64_t> parseIntText(const std::string &text) {
  * @see parseIntText
  * @see foldIntExpr
  */
-static std::optional<int64_t>
-foldLiteralConstant(const fp::LiteralConstant &lit) {
+static std::optional<int64_t> foldLiteralConstant(const fp::LiteralConstant &lit)
+{
     return std::visit([](const auto &alt) -> std::optional<int64_t> {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::IntLiteralConstant>) {
@@ -293,7 +358,8 @@ foldLiteralConstant(const fp::LiteralConstant &lit) {
         } else {
             return std::nullopt;
         }
-    }, lit.u);
+    },
+                      lit.u);
 }
 
 /**
@@ -312,7 +378,8 @@ foldLiteralConstant(const fp::LiteralConstant &lit) {
  * @see parseIntText
  * @see emitExpr
  */
-static std::optional<int64_t> foldIntExpr(const fp::Expr &e) {
+static std::optional<int64_t> foldIntExpr(const fp::Expr &e)
+{
     return std::visit([](const auto &alt) -> std::optional<int64_t> {
         using T = std::decay_t<decltype(alt)>;
 
@@ -357,7 +424,8 @@ static std::optional<int64_t> foldIntExpr(const fp::Expr &e) {
         } else {
             return std::nullopt;
         }
-    }, e.u);
+    },
+                      e.u);
 }
 
 /**
@@ -372,8 +440,8 @@ static std::optional<int64_t> foldIntExpr(const fp::Expr &e) {
  * @return The lower-cased name, or nullopt if the designator is not a bare Name.
  * @see emitExpr
  */
-static std::optional<std::string>
-designatorToName(const fp::Designator &d) {
+static std::optional<std::string> designatorToName(const fp::Designator &d)
+{
     return std::visit([](const auto &alt) -> std::optional<std::string> {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::DataRef>) {
@@ -385,11 +453,13 @@ designatorToName(const fp::Designator &d) {
                 } else {
                     return std::nullopt;
                 }
-            }, alt.u);
+            },
+                              alt.u);
         } else {
             return std::nullopt;
         }
-    }, d.u);
+    },
+                      d.u);
 }
 
 /**
@@ -420,7 +490,8 @@ struct CallView {
  * @see CallView
  * @see emitActualArgs
  */
-static std::optional<CallView> exprAsCall(const fp::Expr &e) {
+static std::optional<CallView> exprAsCall(const fp::Expr &e)
+{
     return std::visit([](const auto &alt) -> std::optional<CallView> {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::FunctionReference>>) {
@@ -436,7 +507,8 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e) {
                 } else {
                     return std::nullopt;
                 }
-            }, pd.u);
+            },
+                              pd.u);
         } else if constexpr (std::is_same_v<T, fp::StructureConstructor>) {
             // Keyword-arg form; Flang parses it directly as a StructureConstructor.
             // We do not see this for the plain-positional op_arg_dat calls, but
@@ -445,7 +517,8 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e) {
         } else {
             return std::nullopt;
         }
-    }, e.u);
+    },
+                      e.u);
 }
 
 /**
@@ -462,12 +535,15 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e) {
  * @see exprAsCall
  * @see emitActualArgs
  */
-static void emitExpr(Json &json, const fp::Expr &e) {
+static void emitExpr(Json &json, const fp::Expr &e)
+{
     // 1. Integer literal (possibly signed / parenthesised / simple arithmetic).
     if (auto v = foldIntExpr(e)) {
         json.beginObject();
-        json.key("kind"); json.stringValue("int");
-        json.key("value"); json.intValue(*v);
+        json.key("kind");
+        json.stringValue("int");
+        json.key("value");
+        json.intValue(*v);
         json.endObject();
         return;
     }
@@ -496,16 +572,20 @@ static void emitExpr(Json &json, const fp::Expr &e) {
                     } else {
                         return std::nullopt;
                     }
-                }, alt.u);
+                },
+                                  alt.u);
             } else {
                 return std::nullopt;
             }
-        }, expr.u);
+        },
+                          expr.u);
     };
     if (auto s = extractCharLiteral(e)) {
         json.beginObject();
-        json.key("kind"); json.stringValue("string");
-        json.key("value"); json.stringValue(*s);
+        json.key("kind");
+        json.stringValue("string");
+        json.key("value");
+        json.stringValue(*s);
         json.endObject();
         return;
     }
@@ -516,21 +596,26 @@ static void emitExpr(Json &json, const fp::Expr &e) {
         if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
             if (auto name = designatorToName(alt.value())) {
                 json.beginObject();
-                json.key("kind"); json.stringValue("name");
-                json.key("value"); json.stringValue(*name);
+                json.key("kind");
+                json.stringValue("name");
+                json.key("value");
+                json.stringValue(*name);
                 json.endObject();
                 return true;
             }
         }
         return false;
-    }, e.u);
+    },
+                              e.u);
     if (emitted) return;
 
     // 4. Nested call, e.g. op_arg_dat(...), op_arg_gbl(...), op_arg_idx(...).
     if (auto call = exprAsCall(e)) {
         json.beginObject();
-        json.key("kind"); json.stringValue("call");
-        json.key("name"); json.stringValue(call->name);
+        json.key("kind");
+        json.stringValue("call");
+        json.key("name");
+        json.stringValue(call->name);
         json.key("args");
         emitActualArgs(json, *call->args);
         json.endObject();
@@ -540,8 +625,10 @@ static void emitExpr(Json &json, const fp::Expr &e) {
     // 5. Fallback: emit the raw source text so the Python side can either
     // parse it or flag it as unsupported.
     json.beginObject();
-    json.key("kind"); json.stringValue("raw");
-    json.key("source"); json.stringValue(sourceText(e.source));
+    json.key("kind");
+    json.stringValue("raw");
+    json.key("source");
+    json.stringValue(sourceText(e.source));
     json.endObject();
 }
 
@@ -558,7 +645,8 @@ static void emitExpr(Json &json, const fp::Expr &e) {
  * @param args Actual-argument list from the call.
  * @see emitExpr
  */
-static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args) {
+static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args)
+{
     json.beginArray();
     for (const fp::ActualArgSpec &spec : args) {
         // ActualArgSpec = std::tuple<std::optional<Keyword>, ActualArg>
@@ -573,11 +661,14 @@ static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args)
                 return true;
             }
             return false;
-        }, aa.u);
+        },
+                                  aa.u);
         if (!handled) {
             json.beginObject();
-            json.key("kind"); json.stringValue("raw");
-            json.key("source"); json.stringValue("<unsupported-actual-arg>");
+            json.key("kind");
+            json.stringValue("raw");
+            json.key("source");
+            json.stringValue("<unsupported-actual-arg>");
             json.endObject();
         }
     }
@@ -615,7 +706,8 @@ struct DependsCollector {
      * @param cs Parse-tree CALL statement.
      * @return Always `true`, so Flang continues walking the subtree.
      */
-    bool Pre(const fp::CallStmt &cs) {
+    bool Pre(const fp::CallStmt &cs)
+    {
         const fp::Call &c = std::get<fp::Call>(cs.t);
         const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
         std::visit([&](const auto &p) {
@@ -623,7 +715,8 @@ struct DependsCollector {
             if constexpr (std::is_same_v<T, fp::Name>) {
                 out.insert(toLower(p.ToString()));
             }
-        }, pd.u);
+        },
+                   pd.u);
         return true;
     }
 
@@ -635,7 +728,8 @@ struct DependsCollector {
      * @param fr Parse-tree function reference (may also be array indexing).
      * @return Always `true`, so Flang continues walking the subtree.
      */
-    bool Pre(const fp::FunctionReference &fr) {
+    bool Pre(const fp::FunctionReference &fr)
+    {
         const fp::Call &c = fr.v;
         const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
         std::visit([&](const auto &p) {
@@ -643,14 +737,21 @@ struct DependsCollector {
             if constexpr (std::is_same_v<T, fp::Name>) {
                 out.insert(toLower(p.ToString()));
             }
-        }, pd.u);
+        },
+                   pd.u);
         return true;
     }
 
     // No-op fallbacks for every other parse-tree node type. Required by
     // Flang's Walk() so that the visitor matches every node it visits.
-    template <typename T> bool Pre(const T &) { return true; }
-    template <typename T> void Post(const T &) {}
+    template <typename T>
+    bool Pre(const T &)
+    {
+        return true;
+    }
+    template <typename T>
+    void Post(const T &)
+    {}
 };
 
 // Kernel-body expression/statement serialization (for Stage 2 validation)
@@ -731,7 +832,8 @@ static void emitBodyExpr(Json &json, const fp::Expr &e);
  * @return Raw source spelling of the kind selector.
  * @see emitLiteralConstant
  */
-static std::string kindParamToString(const fp::KindParam &kp) {
+static std::string kindParamToString(const fp::KindParam &kp)
+{
     return std::visit([](const auto &alt) -> std::string {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, std::uint64_t>) {
@@ -740,7 +842,8 @@ static std::string kindParamToString(const fp::KindParam &kp) {
             // Scalar<Integer<Constant<Name>>>
             return toLower(alt.thing.thing.thing.ToString());
         }
-    }, kp.u);
+    },
+                      kp.u);
 }
 
 /**
@@ -751,49 +854,63 @@ static std::string kindParamToString(const fp::KindParam &kp) {
  * @see kindParamToString
  * @see emitBodyExpr
  */
-static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit) {
+static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::IntLiteralConstant>) {
             const auto &cb = std::get<fp::CharBlock>(alt.t);
             const auto &kindOpt = std::get<std::optional<fp::KindParam>>(alt.t);
             json.beginObject();
-            json.key("kind"); json.stringValue("int_lit");
-            json.key("text"); json.stringValue(sourceText(cb));
+            json.key("kind");
+            json.stringValue("int_lit");
+            json.key("text");
+            json.stringValue(sourceText(cb));
             json.key("kind_text");
-            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt));
+            else json.nullValue();
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::RealLiteralConstant>) {
             const auto &real = std::get<fp::RealLiteralConstant::Real>(alt.t);
             const auto &kindOpt = std::get<std::optional<fp::KindParam>>(alt.t);
             json.beginObject();
-            json.key("kind"); json.stringValue("real_lit");
-            json.key("text"); json.stringValue(sourceText(real.source));
+            json.key("kind");
+            json.stringValue("real_lit");
+            json.key("text");
+            json.stringValue(sourceText(real.source));
             json.key("kind_text");
-            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt));
+            else json.nullValue();
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::LogicalLiteralConstant>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("logical_lit");
-            json.key("value"); json.boolValue(std::get<bool>(alt.t));
+            json.key("kind");
+            json.stringValue("logical_lit");
+            json.key("value");
+            json.boolValue(std::get<bool>(alt.t));
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::CharLiteralConstant>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("char_lit");
-            json.key("value"); json.stringValue(std::get<std::string>(alt.t));
+            json.key("kind");
+            json.stringValue("char_lit");
+            json.key("value");
+            json.stringValue(std::get<std::string>(alt.t));
             json.endObject();
             return true;
         }
         return false;
-    }, lit.u);
+    },
+                              lit.u);
 
     if (!emitted) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
-        json.key("tag"); json.stringValue("literal_constant");
+        json.key("kind");
+        json.stringValue("unsupported");
+        json.key("tag");
+        json.stringValue("literal_constant");
         json.endObject();
     }
 }
@@ -807,7 +924,8 @@ static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit) {
  * @param sub Parse-tree node being visited.
  * @see emitBodyExpr
  */
-static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub) {
+static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub)
+{
     std::visit([&](const auto &alt) {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::SubscriptTriplet>) {
@@ -821,7 +939,8 @@ static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub) {
                 }
             };
             json.beginObject();
-            json.key("kind"); json.stringValue("triplet");
+            json.key("kind");
+            json.stringValue("triplet");
             emitBound("lower", std::get<0>(t));
             emitBound("upper", std::get<1>(t));
             emitBound("stride", std::get<2>(t));
@@ -830,7 +949,8 @@ static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub) {
             // Subscript = ScalarIntExpr = Scalar<Integer<Indirection<Expr>>>.
             emitBodyExpr(json, alt.thing.value());
         }
-    }, sub.u);
+    },
+               sub.u);
 }
 
 /**
@@ -845,7 +965,8 @@ static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub) {
  * @see emitBodyExpr
  * @see emitBodySubscript
  */
-static void emitDesignator(Json &json, const fp::Designator &d) {
+static void emitDesignator(Json &json, const fp::Designator &d)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::DataRef>) {
@@ -853,8 +974,10 @@ static void emitDesignator(Json &json, const fp::Designator &d) {
                 using U = std::decay_t<decltype(inner)>;
                 if constexpr (std::is_same_v<U, fp::Name>) {
                     json.beginObject();
-                    json.key("kind"); json.stringValue("name");
-                    json.key("value"); json.stringValue(toLower(inner.ToString()));
+                    json.key("kind");
+                    json.stringValue("name");
+                    json.key("value");
+                    json.stringValue(toLower(inner.ToString()));
                     json.endObject();
                     return true;
                 } else if constexpr (std::is_same_v<U, Fortran::common::Indirection<fp::ArrayElement>>) {
@@ -863,8 +986,10 @@ static void emitDesignator(Json &json, const fp::Designator &d) {
                         using V = std::decay_t<decltype(baseAlt)>;
                         if constexpr (std::is_same_v<V, fp::Name>) {
                             json.beginObject();
-                            json.key("kind"); json.stringValue("part_ref");
-                            json.key("name"); json.stringValue(toLower(baseAlt.ToString()));
+                            json.key("kind");
+                            json.stringValue("part_ref");
+                            json.key("name");
+                            json.stringValue(toLower(baseAlt.ToString()));
                             json.key("subscripts");
                             json.beginArray();
                             for (const auto &s : ae.Subscripts()) emitBodySubscript(json, s);
@@ -873,19 +998,24 @@ static void emitDesignator(Json &json, const fp::Designator &d) {
                             return true;
                         }
                         return false;
-                    }, ae.Base().u);
+                    },
+                                      ae.Base().u);
                 } else {
                     return false;
                 }
-            }, alt.u);
+            },
+                              alt.u);
         }
         return false;
-    }, d.u);
+    },
+                              d.u);
 
     if (!emitted) {
         json.beginObject();
-        json.key("kind"); json.stringValue("raw");
-        json.key("source"); json.stringValue(sourceText(d.source));
+        json.key("kind");
+        json.stringValue("raw");
+        json.key("source");
+        json.stringValue(sourceText(d.source));
         json.endObject();
     }
 }
@@ -897,7 +1027,8 @@ static void emitDesignator(Json &json, const fp::Designator &d) {
  * @param fr Parse-tree function reference (may also be array indexing).
  * @see emitBodyExpr
  */
-static void emitFuncRef(Json &json, const fp::FunctionReference &fr) {
+static void emitFuncRef(Json &json, const fp::FunctionReference &fr)
+{
     const fp::Call &call = fr.v;
     const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(call.t);
     const auto &args = std::get<std::list<fp::ActualArgSpec>>(call.t);
@@ -909,19 +1040,24 @@ static void emitFuncRef(Json &json, const fp::FunctionReference &fr) {
         } else {
             return std::nullopt;
         }
-    }, pd.u);
+    },
+                                                 pd.u);
 
     if (!name) {
         json.beginObject();
-        json.key("kind"); json.stringValue("raw");
-        json.key("source"); json.stringValue("<complex-procedure-designator>");
+        json.key("kind");
+        json.stringValue("raw");
+        json.key("source");
+        json.stringValue("<complex-procedure-designator>");
         json.endObject();
         return;
     }
 
     json.beginObject();
-    json.key("kind"); json.stringValue("funcref");
-    json.key("name"); json.stringValue(*name);
+    json.key("kind");
+    json.stringValue("funcref");
+    json.key("name");
+    json.stringValue(*name);
     json.key("args");
     json.beginArray();
     for (const fp::ActualArgSpec &spec : args) {
@@ -933,11 +1069,14 @@ static void emitFuncRef(Json &json, const fp::FunctionReference &fr) {
                 return true;
             }
             return false;
-        }, aa.u);
+        },
+                                  aa.u);
         if (!handled) {
             json.beginObject();
-            json.key("kind"); json.stringValue("raw");
-            json.key("source"); json.stringValue("<unsupported-actual-arg>");
+            json.key("kind");
+            json.stringValue("raw");
+            json.key("source");
+            json.stringValue("<unsupported-actual-arg>");
             json.endObject();
         }
     }
@@ -955,7 +1094,8 @@ static void emitFuncRef(Json &json, const fp::FunctionReference &fr) {
  * @see emitDesignator
  * @see emitFuncRef
  */
-static void emitVariable(Json &json, const fp::Variable &v) {
+static void emitVariable(Json &json, const fp::Variable &v)
+{
     std::visit([&](const auto &alt) {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
@@ -963,10 +1103,12 @@ static void emitVariable(Json &json, const fp::Variable &v) {
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::FunctionReference>>) {
             emitFuncRef(json, alt.value());
         }
-    }, v.u);
+    },
+               v.u);
 }
 
-static void emitBodyExpr(Json &json, const fp::Expr &e) {
+static void emitBodyExpr(Json &json, const fp::Expr &e)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
 
@@ -978,32 +1120,40 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
             return true;
         } else if constexpr (std::is_same_v<T, fp::Expr::Parentheses>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("paren");
-            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.key("kind");
+            json.stringValue("paren");
+            json.key("expr");
+            emitBodyExpr(json, alt.v.value());
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::Expr::UnaryPlus>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("unary");
-            json.key("op"); json.stringValue("+");
-            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.key("kind");
+            json.stringValue("unary");
+            json.key("op");
+            json.stringValue("+");
+            json.key("expr");
+            emitBodyExpr(json, alt.v.value());
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::Expr::Negate>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("unary");
-            json.key("op"); json.stringValue("-");
-            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.key("kind");
+            json.stringValue("unary");
+            json.key("op");
+            json.stringValue("-");
+            json.key("expr");
+            emitBodyExpr(json, alt.v.value());
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::Expr::Add> || std::is_same_v<T, fp::Expr::Subtract> ||
-                              std::is_same_v<T, fp::Expr::Multiply> || std::is_same_v<T, fp::Expr::Divide> ||
-                              std::is_same_v<T, fp::Expr::Power> || std::is_same_v<T, fp::Expr::Concat> ||
-                              std::is_same_v<T, fp::Expr::LT> || std::is_same_v<T, fp::Expr::LE> ||
-                              std::is_same_v<T, fp::Expr::EQ> || std::is_same_v<T, fp::Expr::NE> ||
-                              std::is_same_v<T, fp::Expr::GE> || std::is_same_v<T, fp::Expr::GT> ||
-                              std::is_same_v<T, fp::Expr::AND> || std::is_same_v<T, fp::Expr::OR> ||
-                              std::is_same_v<T, fp::Expr::EQV> || std::is_same_v<T, fp::Expr::NEQV>) {
+                             std::is_same_v<T, fp::Expr::Multiply> || std::is_same_v<T, fp::Expr::Divide> ||
+                             std::is_same_v<T, fp::Expr::Power> || std::is_same_v<T, fp::Expr::Concat> ||
+                             std::is_same_v<T, fp::Expr::LT> || std::is_same_v<T, fp::Expr::LE> ||
+                             std::is_same_v<T, fp::Expr::EQ> || std::is_same_v<T, fp::Expr::NE> ||
+                             std::is_same_v<T, fp::Expr::GE> || std::is_same_v<T, fp::Expr::GT> ||
+                             std::is_same_v<T, fp::Expr::AND> || std::is_same_v<T, fp::Expr::OR> ||
+                             std::is_same_v<T, fp::Expr::EQV> || std::is_same_v<T, fp::Expr::NEQV>) {
             // All of Fortran's binary intrinsic operators (arithmetic,
             // relational, logical, concatenation) share the same
             // IntrinsicBinary tuple<Indirection<Expr>, Indirection<Expr>>
@@ -1028,17 +1178,24 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
             else if constexpr (std::is_same_v<T, fp::Expr::NEQV>) op = "!=";
 
             json.beginObject();
-            json.key("kind"); json.stringValue("binary");
-            json.key("op"); json.stringValue(op);
-            json.key("left"); emitBodyExpr(json, std::get<0>(alt.t).value());
-            json.key("right"); emitBodyExpr(json, std::get<1>(alt.t).value());
+            json.key("kind");
+            json.stringValue("binary");
+            json.key("op");
+            json.stringValue(op);
+            json.key("left");
+            emitBodyExpr(json, std::get<0>(alt.t).value());
+            json.key("right");
+            emitBodyExpr(json, std::get<1>(alt.t).value());
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::Expr::NOT>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("unary");
-            json.key("op"); json.stringValue("!");
-            json.key("expr"); emitBodyExpr(json, alt.v.value());
+            json.key("kind");
+            json.stringValue("unary");
+            json.key("op");
+            json.stringValue("!");
+            json.key("expr");
+            emitBodyExpr(json, alt.v.value());
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::LiteralConstant>) {
@@ -1047,7 +1204,8 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
         }
 
         return false;
-    }, e.u);
+    },
+                              e.u);
 
     if (emitted) return;
 
@@ -1057,9 +1215,12 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
     // Python side can raise a clear error rather than silently misreading
     // it as a value.
     json.beginObject();
-    json.key("kind"); json.stringValue("unsupported");
-    json.key("tag"); json.stringValue("expr");
-    json.key("source"); json.stringValue(sourceText(e.source));
+    json.key("kind");
+    json.stringValue("unsupported");
+    json.key("tag");
+    json.stringValue("expr");
+    json.key("source");
+    json.stringValue(sourceText(e.source));
     json.endObject();
 }
 
@@ -1073,22 +1234,34 @@ static void emitBodyExpr(Json &json, const fp::Expr &e) {
 // Python cross-references that against the const/parameter list.
 struct NameCollector {
     std::vector<std::string> &out;
-    bool Pre(const fp::Name &n) { out.push_back(toLower(n.ToString())); return true; }
-    template <typename T> bool Pre(const T &) { return true; }
-    template <typename T> void Post(const T &) {}
+    bool Pre(const fp::Name &n)
+    {
+        out.push_back(toLower(n.ToString()));
+        return true;
+    }
+    template <typename T>
+    bool Pre(const T &)
+    {
+        return true;
+    }
+    template <typename T>
+    void Post(const T &)
+    {}
 };
 
 struct LocalsCollector {
-    Json &json;   // emits directly into an open array of {"name", "dims"} objects
+    Json &json; // emits directly into an open array of {"name", "dims"} objects
 
-    static const fp::ArraySpec *findArraySpecAttr(const std::list<fp::AttrSpec> &attrs) {
+    static const fp::ArraySpec *findArraySpecAttr(const std::list<fp::AttrSpec> &attrs)
+    {
         for (const auto &attr : attrs) {
             if (const auto *spec = std::get_if<fp::ArraySpec>(&attr.u)) return spec;
         }
         return nullptr;
     }
 
-    static std::vector<std::string> collectShapeDimNames(const fp::ArraySpec *spec) {
+    static std::vector<std::string> collectShapeDimNames(const fp::ArraySpec *spec)
+    {
         std::vector<std::string> names;
         if (!spec) return names;
         if (const auto *shapes = std::get_if<std::list<fp::ExplicitShapeSpec>>(&spec->u)) {
@@ -1106,7 +1279,8 @@ struct LocalsCollector {
      * @param decl Parse-tree type-declaration statement.
      * @return Always `true`, so Flang continues walking the subtree.
      */
-    bool Pre(const fp::TypeDeclarationStmt &decl) {
+    bool Pre(const fp::TypeDeclarationStmt &decl)
+    {
         const auto &attrs = std::get<std::list<fp::AttrSpec>>(decl.t);
         const fp::ArraySpec *attrArraySpec = findArraySpecAttr(attrs);
 
@@ -1121,7 +1295,8 @@ struct LocalsCollector {
             std::vector<std::string> dims = collectShapeDimNames(spec);
 
             json.beginObject();
-            json.key("name"); json.stringValue(toLower(nameNode.ToString()));
+            json.key("name");
+            json.stringValue(toLower(nameNode.ToString()));
             json.key("dims");
             json.beginArray();
             for (const auto &d : dims) json.stringValue(d);
@@ -1131,8 +1306,14 @@ struct LocalsCollector {
         return true;
     }
 
-    template <typename T> bool Pre(const T &) { return true; }
-    template <typename T> void Post(const T &) {}
+    template <typename T>
+    bool Pre(const T &)
+    {
+        return true;
+    }
+    template <typename T>
+    void Post(const T &)
+    {}
 };
 
 /**
@@ -1155,11 +1336,12 @@ struct LocalsCollector {
  * @see emitBodyExpr
  */
 struct BodyCollector {
-    Json &jsonAssignments;   // open array of {"line", "lhs", "rhs"}
-    Json &jsonCalls;         // open array of {"line", "name", "args"}
+    Json &jsonAssignments; // open array of {"line", "lhs", "rhs"}
+    Json &jsonCalls;       // open array of {"line", "name", "args"}
     const fp::AllCookedSources &cooked;
 
-    std::pair<int, int> resolveLineCol(fp::CharBlock src) const {
+    std::pair<int, int> resolveLineCol(fp::CharBlock src) const
+    {
         if (src.empty()) return {0, 0};
         auto prov = cooked.GetProvenanceRange(src);
         if (!prov) return {0, 0};
@@ -1168,20 +1350,25 @@ struct BodyCollector {
         return {0, 0};
     }
 
-    bool Pre(const fp::AssignmentStmt &assign) {
+    bool Pre(const fp::AssignmentStmt &assign)
+    {
         const auto &lhs = std::get<fp::Variable>(assign.t);
         const auto &rhs = std::get<fp::Expr>(assign.t);
         auto [line, col] = resolveLineCol(rhs.source);
 
         jsonAssignments.beginObject();
-        jsonAssignments.key("line"); jsonAssignments.intValue(line);
-        jsonAssignments.key("lhs"); emitVariable(jsonAssignments, lhs);
-        jsonAssignments.key("rhs"); emitBodyExpr(jsonAssignments, rhs);
+        jsonAssignments.key("line");
+        jsonAssignments.intValue(line);
+        jsonAssignments.key("lhs");
+        emitVariable(jsonAssignments, lhs);
+        jsonAssignments.key("rhs");
+        emitBodyExpr(jsonAssignments, rhs);
         jsonAssignments.endObject();
         return true;
     }
 
-    bool Pre(const fp::CallStmt &call) {
+    bool Pre(const fp::CallStmt &call)
+    {
         const fp::Call &c = std::get<fp::Call>(call.t);
         const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
         const auto &args = std::get<std::list<fp::ActualArgSpec>>(c.t);
@@ -1196,15 +1383,18 @@ struct BodyCollector {
                 return true;
             }
             return false;
-        }, pd.u);
+        },
+                                  pd.u);
 
         if (!gotName) return true;
 
         auto [line, col] = resolveLineCol(nameSrc);
 
         jsonCalls.beginObject();
-        jsonCalls.key("line"); jsonCalls.intValue(line);
-        jsonCalls.key("name"); jsonCalls.stringValue(name);
+        jsonCalls.key("line");
+        jsonCalls.intValue(line);
+        jsonCalls.key("name");
+        jsonCalls.stringValue(name);
         jsonCalls.key("args");
         jsonCalls.beginArray();
         for (const fp::ActualArgSpec &spec : args) {
@@ -1216,11 +1406,14 @@ struct BodyCollector {
                     return true;
                 }
                 return false;
-            }, aa.u);
+            },
+                                      aa.u);
             if (!handled) {
                 jsonCalls.beginObject();
-                jsonCalls.key("kind"); jsonCalls.stringValue("raw");
-                jsonCalls.key("source"); jsonCalls.stringValue("<unsupported-actual-arg>");
+                jsonCalls.key("kind");
+                jsonCalls.stringValue("raw");
+                jsonCalls.key("source");
+                jsonCalls.stringValue("<unsupported-actual-arg>");
                 jsonCalls.endObject();
             }
         }
@@ -1229,8 +1422,14 @@ struct BodyCollector {
         return true;
     }
 
-    template <typename T> bool Pre(const T &) { return true; }
-    template <typename T> void Post(const T &) {}
+    template <typename T>
+    bool Pre(const T &)
+    {
+        return true;
+    }
+    template <typename T>
+    void Post(const T &)
+    {}
 };
 
 // Parse-tree "unwrap" helpers.
@@ -1243,12 +1442,30 @@ struct BodyCollector {
 // layer. These helpers thread through one specific chain each so the
 // declaration/statement emitters below can write `unwrapFoo(x)` instead of
 // repeating `x.thing.thing.thing.value()` everywhere.
-static const fp::Expr &unwrapScalarIntExpr(const fp::ScalarIntExpr &e) { return e.thing.thing.value(); }
-static const fp::Expr &unwrapScalarLogicalExpr(const fp::ScalarLogicalExpr &e) { return e.thing.thing.value(); }
-static const fp::Expr &unwrapScalarExpr(const fp::ScalarExpr &e) { return e.thing.value(); }
-static const fp::Expr &unwrapConstantExpr(const fp::ConstantExpr &e) { return e.thing.value(); }
-static const fp::Expr &unwrapScalarIntConstantExpr(const fp::ScalarIntConstantExpr &e) { return e.thing.thing.thing.value(); }
-static const fp::Expr &unwrapSpecificationExpr(const fp::SpecificationExpr &e) { return unwrapScalarIntExpr(e.v); }
+static const fp::Expr &unwrapScalarIntExpr(const fp::ScalarIntExpr &e)
+{
+    return e.thing.thing.value();
+}
+static const fp::Expr &unwrapScalarLogicalExpr(const fp::ScalarLogicalExpr &e)
+{
+    return e.thing.thing.value();
+}
+static const fp::Expr &unwrapScalarExpr(const fp::ScalarExpr &e)
+{
+    return e.thing.value();
+}
+static const fp::Expr &unwrapConstantExpr(const fp::ConstantExpr &e)
+{
+    return e.thing.value();
+}
+static const fp::Expr &unwrapScalarIntConstantExpr(const fp::ScalarIntConstantExpr &e)
+{
+    return e.thing.thing.thing.value();
+}
+static const fp::Expr &unwrapSpecificationExpr(const fp::SpecificationExpr &e)
+{
+    return unwrapScalarIntExpr(e.v);
+}
 
 // Declaration serialization (for Stage 3 C++ code generation)
 //
@@ -1305,7 +1522,8 @@ static const fp::Expr &unwrapSpecificationExpr(const fp::SpecificationExpr &e) {
  * @see kindParamToString
  * @see emitIntrinsicType
  */
-static std::optional<std::string> kindSelectorText(const std::optional<fp::KindSelector> &ks) {
+static std::optional<std::string> kindSelectorText(const std::optional<fp::KindSelector> &ks)
+{
     if (!ks) return std::nullopt;
     if (const auto *sice = std::get_if<fp::ScalarIntConstantExpr>(&ks->u)) {
         return sourceText(unwrapScalarIntConstantExpr(*sice).source);
@@ -1320,7 +1538,8 @@ static std::optional<std::string> kindSelectorText(const std::optional<fp::KindS
  * @param tpv Character length type-param-value.
  * @see emitBodyExpr
  */
-static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv) {
+static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv)
+{
     if (const auto *sie = std::get_if<fp::ScalarIntExpr>(&tpv.u)) {
         emitBodyExpr(json, unwrapScalarIntExpr(*sie));
         return;
@@ -1328,20 +1547,26 @@ static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv) {
     // Star (assumed length, dummy args only) or Deferred (allocatable/
     // pointer character) - neither is legal for an OP2 kernel local/param.
     json.beginObject();
-    json.key("kind"); json.stringValue("unsupported");
-    json.key("tag"); json.stringValue("char_length");
+    json.key("kind");
+    json.stringValue("unsupported");
+    json.key("tag");
+    json.stringValue("char_length");
     json.endObject();
 }
 
-static void emitCharLength(Json &json, const fp::CharLength &cl) {
+static void emitCharLength(Json &json, const fp::CharLength &cl)
+{
     if (const auto *tpv = std::get_if<fp::TypeParamValue>(&cl.u)) {
         emitTypeParamValue(json, *tpv);
         return;
     }
     json.beginObject();
-    json.key("kind"); json.stringValue("int_lit");
-    json.key("text"); json.stringValue(std::to_string(std::get<std::uint64_t>(cl.u)));
-    json.key("kind_text"); json.nullValue();
+    json.key("kind");
+    json.stringValue("int_lit");
+    json.key("text");
+    json.stringValue(std::to_string(std::get<std::uint64_t>(cl.u)));
+    json.key("kind_text");
+    json.nullValue();
     json.endObject();
 }
 
@@ -1352,8 +1577,12 @@ static void emitCharLength(Json &json, const fp::CharLength &cl) {
  * @param cs Optional character selector (`*n` or `(LEN=..., KIND=...)`).
  * @see emitTypeParamValue
  */
-static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs) {
-    if (!cs) { json.nullValue(); return; }
+static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs)
+{
+    if (!cs) {
+        json.nullValue();
+        return;
+    }
 
     std::visit([&](const auto &alt) {
         using T = std::decay_t<decltype(alt)>;
@@ -1365,14 +1594,16 @@ static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs) {
                 } else {
                     emitCharLength(json, inner);
                 }
-            }, alt.u);
+            },
+                       alt.u);
         } else {
             // LengthAndKind: tuple<optional<TypeParamValue>, ScalarIntConstantExpr>.
             const auto &lengthOpt = std::get<0>(alt.t);
             if (lengthOpt) emitTypeParamValue(json, *lengthOpt);
             else json.nullValue();
         }
-    }, cs->u);
+    },
+               cs->u);
 }
 
 /**
@@ -1383,32 +1614,44 @@ static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs) {
  * @see kindSelectorText
  * @see emitCharLen
  */
-static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its) {
+static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its)
+{
     std::visit([&](const auto &alt) {
         using T = std::decay_t<decltype(alt)>;
         json.beginObject();
         if constexpr (std::is_same_v<T, fp::IntegerTypeSpec> ||
                       std::is_same_v<T, fp::IntrinsicTypeSpec::Real> ||
                       std::is_same_v<T, fp::IntrinsicTypeSpec::Logical>) {
-            json.key("kind"); json.stringValue("intrinsic");
-            json.key("base"); json.stringValue(
-                std::is_same_v<T, fp::IntegerTypeSpec> ? "integer" :
-                std::is_same_v<T, fp::IntrinsicTypeSpec::Real> ? "real" : "logical");
+            json.key("kind");
+            json.stringValue("intrinsic");
+            json.key("base");
+            json.stringValue(
+                std::is_same_v<T, fp::IntegerTypeSpec> ? "integer" : std::is_same_v<T, fp::IntrinsicTypeSpec::Real> ? "real"
+                                                                                                                    : "logical");
             auto kt = kindSelectorText(alt.v);
-            json.key("kind_text"); if (kt) json.stringValue(*kt); else json.nullValue();
-            json.key("charlen"); json.nullValue();
+            json.key("kind_text");
+            if (kt) json.stringValue(*kt);
+            else json.nullValue();
+            json.key("charlen");
+            json.nullValue();
         } else if constexpr (std::is_same_v<T, fp::IntrinsicTypeSpec::Character>) {
-            json.key("kind"); json.stringValue("intrinsic");
-            json.key("base"); json.stringValue("character");
-            json.key("kind_text"); json.nullValue();
-            json.key("charlen"); emitCharLen(json, alt.v);
+            json.key("kind");
+            json.stringValue("intrinsic");
+            json.key("base");
+            json.stringValue("character");
+            json.key("kind_text");
+            json.nullValue();
+            json.key("charlen");
+            emitCharLen(json, alt.v);
         } else {
             // UnsignedTypeSpec, DoublePrecision, Complex, DoubleComplex -
             // none of these appear in real OP2 kernels.
-            json.key("kind"); json.stringValue("unsupported");
+            json.key("kind");
+            json.stringValue("unsupported");
         }
         json.endObject();
-    }, its.u);
+    },
+               its.u);
 }
 
 /**
@@ -1418,13 +1661,15 @@ static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its) {
  * @param dts Declaration type spec.
  * @see emitIntrinsicType
  */
-static void emitDeclType(Json &json, const fp::DeclarationTypeSpec &dts) {
+static void emitDeclType(Json &json, const fp::DeclarationTypeSpec &dts)
+{
     if (const auto *its = std::get_if<fp::IntrinsicTypeSpec>(&dts.u)) {
         emitIntrinsicType(json, *its);
         return;
     }
     json.beginObject();
-    json.key("kind"); json.stringValue("unsupported");
+    json.key("kind");
+    json.stringValue("unsupported");
     json.endObject();
 }
 
@@ -1435,17 +1680,20 @@ static void emitDeclType(Json &json, const fp::DeclarationTypeSpec &dts) {
  * @param spec Array spec from a type-decl attribute or entity suffix.
  * @see emitBodyExpr
  */
-static void emitArraySpec(Json &json, const fp::ArraySpec &spec) {
+static void emitArraySpec(Json &json, const fp::ArraySpec &spec)
+{
     const auto *shapes = std::get_if<std::list<fp::ExplicitShapeSpec>>(&spec.u);
     if (!shapes) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
+        json.key("kind");
+        json.stringValue("unsupported");
         json.endObject();
         return;
     }
 
     json.beginObject();
-    json.key("kind"); json.stringValue("explicit");
+    json.key("kind");
+    json.stringValue("explicit");
     json.key("shape");
     json.beginArray();
     for (const fp::ExplicitShapeSpec &dim : *shapes) {
@@ -1454,8 +1702,10 @@ static void emitArraySpec(Json &json, const fp::ArraySpec &spec) {
 
         json.beginObject();
         json.key("lb");
-        if (lbOpt) emitBodyExpr(json, unwrapSpecificationExpr(*lbOpt)); else json.nullValue();
-        json.key("ub"); emitBodyExpr(json, unwrapSpecificationExpr(ub));
+        if (lbOpt) emitBodyExpr(json, unwrapSpecificationExpr(*lbOpt));
+        else json.nullValue();
+        json.key("ub");
+        emitBodyExpr(json, unwrapSpecificationExpr(ub));
         json.endObject();
     }
     json.endArray();
@@ -1469,8 +1719,12 @@ static void emitArraySpec(Json &json, const fp::ArraySpec &spec) {
  * @param init Optional entity initializer.
  * @see emitBodyExpr
  */
-static void emitInitialization(Json &json, const std::optional<fp::Initialization> &init) {
-    if (!init) { json.nullValue(); return; }
+static void emitInitialization(Json &json, const std::optional<fp::Initialization> &init)
+{
+    if (!init) {
+        json.nullValue();
+        return;
+    }
     if (const auto *ce = std::get_if<fp::ConstantExpr>(&init->u)) {
         emitBodyExpr(json, unwrapConstantExpr(*ce));
         return;
@@ -1478,12 +1732,15 @@ static void emitInitialization(Json &json, const std::optional<fp::Initializatio
     // NullInit, InitialDataTarget, or the legacy `/values/` DATA-like form -
     // none of these are legal on a PARAMETER entity anyway.
     json.beginObject();
-    json.key("kind"); json.stringValue("unsupported");
-    json.key("tag"); json.stringValue("initialization");
+    json.key("kind");
+    json.stringValue("unsupported");
+    json.key("tag");
+    json.stringValue("initialization");
     json.endObject();
 }
 
-static bool hasParameterAttr(const std::list<fp::AttrSpec> &attrs) {
+static bool hasParameterAttr(const std::list<fp::AttrSpec> &attrs)
+{
     for (const fp::AttrSpec &attr : attrs) {
         if (std::holds_alternative<fp::Parameter>(attr.u)) return true;
     }
@@ -1498,7 +1755,8 @@ static bool hasParameterAttr(const std::list<fp::AttrSpec> &attrs) {
  * @see emitLiteralConstant
  * @see emitDesignator
  */
-static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc) {
+static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::LiteralConstant>) {
@@ -1508,10 +1766,13 @@ static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc) {
             const auto &cb = std::get<fp::CharBlock>(alt.t);
             const auto &kindOpt = std::get<std::optional<fp::KindParam>>(alt.t);
             json.beginObject();
-            json.key("kind"); json.stringValue("int_lit");
-            json.key("text"); json.stringValue(sourceText(cb));
+            json.key("kind");
+            json.stringValue("int_lit");
+            json.key("text");
+            json.stringValue(sourceText(cb));
             json.key("kind_text");
-            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt));
+            else json.nullValue();
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, fp::SignedRealLiteralConstant>) {
@@ -1522,10 +1783,13 @@ static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc) {
             std::string text = sourceText(realCore.source);
             if (signOpt && *signOpt == fp::Sign::Negative) text = "-" + text;
             json.beginObject();
-            json.key("kind"); json.stringValue("real_lit");
-            json.key("text"); json.stringValue(text);
+            json.key("kind");
+            json.stringValue("real_lit");
+            json.key("text");
+            json.stringValue(text);
             json.key("kind_text");
-            if (kindOpt) json.stringValue(kindParamToString(*kindOpt)); else json.nullValue();
+            if (kindOpt) json.stringValue(kindParamToString(*kindOpt));
+            else json.nullValue();
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
@@ -1533,12 +1797,15 @@ static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc) {
             return true;
         }
         return false;
-    }, dc.u);
+    },
+                              dc.u);
 
     if (!emitted) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
-        json.key("tag"); json.stringValue("data_stmt_constant");
+        json.key("kind");
+        json.stringValue("unsupported");
+        json.key("tag");
+        json.stringValue("data_stmt_constant");
         json.endObject();
     }
 }
@@ -1553,9 +1820,11 @@ static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc) {
  * @see emitDataStmtConstant
  * @see emitVariable
  */
-static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt) {
+static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt)
+{
     json.beginObject();
-    json.key("kind"); json.stringValue("data_stmt");
+    json.key("kind");
+    json.stringValue("data_stmt");
     json.key("sets");
     json.beginArray();
     for (const fp::DataStmtSet &set : dstmt.v) {
@@ -1574,11 +1843,14 @@ static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt) {
                 } else {
                     // DataImpliedDo - not used by OP2 kernels.
                     json.beginObject();
-                    json.key("kind"); json.stringValue("unsupported");
-                    json.key("tag"); json.stringValue("data_implied_do");
+                    json.key("kind");
+                    json.stringValue("unsupported");
+                    json.key("tag");
+                    json.stringValue("data_implied_do");
                     json.endObject();
                 }
-            }, obj.u);
+            },
+                       obj.u);
         }
         json.endArray();
 
@@ -1589,8 +1861,10 @@ static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt) {
             const auto &constant = std::get<fp::DataStmtConstant>(val.t);
 
             json.beginObject();
-            json.key("repeated"); json.boolValue(repeatOpt.has_value());
-            json.key("value"); emitDataStmtConstant(json, constant);
+            json.key("repeated");
+            json.boolValue(repeatOpt.has_value());
+            json.key("value");
+            emitDataStmtConstant(json, constant);
             json.endObject();
         }
         json.endArray();
@@ -1610,14 +1884,16 @@ static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt) {
 struct DeclCollector {
     Json &json;
 
-    static const fp::ArraySpec *findArraySpecAttr(const std::list<fp::AttrSpec> &attrs) {
+    static const fp::ArraySpec *findArraySpecAttr(const std::list<fp::AttrSpec> &attrs)
+    {
         for (const fp::AttrSpec &attr : attrs) {
             if (const auto *spec = std::get_if<fp::ArraySpec>(&attr.u)) return spec;
         }
         return nullptr;
     }
 
-    bool Pre(const fp::TypeDeclarationStmt &decl) {
+    bool Pre(const fp::TypeDeclarationStmt &decl)
+    {
         const auto &declTypeSpec = std::get<fp::DeclarationTypeSpec>(decl.t);
         const auto &attrs = std::get<std::list<fp::AttrSpec>>(decl.t);
         const auto &entityDecls = std::get<std::list<fp::EntityDecl>>(decl.t);
@@ -1625,11 +1901,15 @@ struct DeclCollector {
         const fp::ArraySpec *attrArraySpec = findArraySpecAttr(attrs);
 
         json.beginObject();
-        json.key("kind"); json.stringValue("type_decl");
-        json.key("type"); emitDeclType(json, declTypeSpec);
-        json.key("is_parameter"); json.boolValue(hasParameterAttr(attrs));
+        json.key("kind");
+        json.stringValue("type_decl");
+        json.key("type");
+        emitDeclType(json, declTypeSpec);
+        json.key("is_parameter");
+        json.boolValue(hasParameterAttr(attrs));
         json.key("dim");
-        if (attrArraySpec) emitArraySpec(json, *attrArraySpec); else json.nullValue();
+        if (attrArraySpec) emitArraySpec(json, *attrArraySpec);
+        else json.nullValue();
 
         json.key("entities");
         json.beginArray();
@@ -1639,10 +1919,13 @@ struct DeclCollector {
             const auto &init = std::get<std::optional<fp::Initialization>>(ed.t);
 
             json.beginObject();
-            json.key("name"); json.stringValue(toLower(nameNode.ToString()));
+            json.key("name");
+            json.stringValue(toLower(nameNode.ToString()));
             json.key("dim");
-            if (ownSpec) emitArraySpec(json, *ownSpec); else json.nullValue();
-            json.key("init"); emitInitialization(json, init);
+            if (ownSpec) emitArraySpec(json, *ownSpec);
+            else json.nullValue();
+            json.key("init");
+            emitInitialization(json, init);
             json.endObject();
         }
         json.endArray();
@@ -1651,9 +1934,11 @@ struct DeclCollector {
         return true;
     }
 
-    bool Pre(const fp::ParameterStmt &pstmt) {
+    bool Pre(const fp::ParameterStmt &pstmt)
+    {
         json.beginObject();
-        json.key("kind"); json.stringValue("parameter_stmt");
+        json.key("kind");
+        json.stringValue("parameter_stmt");
         json.key("defs");
         json.beginArray();
         for (const fp::NamedConstantDef &def : pstmt.v) {
@@ -1661,8 +1946,10 @@ struct DeclCollector {
             const fp::ConstantExpr &ce = std::get<fp::ConstantExpr>(def.t);
 
             json.beginObject();
-            json.key("name"); json.stringValue(toLower(nc.v.ToString()));
-            json.key("value"); emitBodyExpr(json, unwrapConstantExpr(ce));
+            json.key("name");
+            json.stringValue(toLower(nc.v.ToString()));
+            json.key("value");
+            emitBodyExpr(json, unwrapConstantExpr(ce));
             json.endObject();
         }
         json.endArray();
@@ -1670,13 +1957,20 @@ struct DeclCollector {
         return true;
     }
 
-    bool Pre(const fp::DataStmt &dstmt) {
+    bool Pre(const fp::DataStmt &dstmt)
+    {
         emitDataStmtNode(json, dstmt);
         return true;
     }
 
-    template <typename T> bool Pre(const T &) { return true; }
-    template <typename T> void Post(const T &) {}
+    template <typename T>
+    bool Pre(const T &)
+    {
+        return true;
+    }
+    template <typename T>
+    void Post(const T &)
+    {}
 };
 
 // Statement-tree serialization (for Stage 3 C++ code generation)
@@ -1721,7 +2015,8 @@ struct DeclCollector {
 
 static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked);
 
-static std::pair<int, int> resolveLineColStmt(const fp::AllCookedSources &cooked, fp::CharBlock src) {
+static std::pair<int, int> resolveLineColStmt(const fp::AllCookedSources &cooked, fp::CharBlock src)
+{
     if (src.empty()) return {0, 0};
     auto prov = cooked.GetProvenanceRange(src);
     if (!prov) return {0, 0};
@@ -1739,7 +2034,8 @@ static std::pair<int, int> resolveLineColStmt(const fp::AllCookedSources &cooked
  * @see emitBodyExpr
  * @see resolveLineColStmt
  */
-static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::AllCookedSources &cooked) {
+static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::AllCookedSources &cooked)
+{
     const fp::Call &c = std::get<fp::Call>(call.t);
     const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
     const auto &args = std::get<std::list<fp::ActualArgSpec>>(c.t);
@@ -1754,12 +2050,15 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
             return true;
         }
         return false;
-    }, pd.u);
+    },
+                              pd.u);
 
     if (!gotName) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
-        json.key("tag"); json.stringValue("call_stmt");
+        json.key("kind");
+        json.stringValue("unsupported");
+        json.key("tag");
+        json.stringValue("call_stmt");
         json.endObject();
         return;
     }
@@ -1767,9 +2066,12 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
     auto [line, col] = resolveLineColStmt(cooked, nameSrc);
 
     json.beginObject();
-    json.key("kind"); json.stringValue("call");
-    json.key("line"); json.intValue(line);
-    json.key("name"); json.stringValue(name);
+    json.key("kind");
+    json.stringValue("call");
+    json.key("line");
+    json.intValue(line);
+    json.key("name");
+    json.stringValue(name);
     json.key("args");
     json.beginArray();
     for (const fp::ActualArgSpec &spec : args) {
@@ -1781,11 +2083,14 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
                 return true;
             }
             return false;
-        }, aa.u);
+        },
+                                  aa.u);
         if (!handled) {
             json.beginObject();
-            json.key("kind"); json.stringValue("unsupported");
-            json.key("tag"); json.stringValue("actual_arg");
+            json.key("kind");
+            json.stringValue("unsupported");
+            json.key("tag");
+            json.stringValue("actual_arg");
             json.endObject();
         }
     }
@@ -1805,7 +2110,8 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
  * @see emitVariable
  * @see emitBodyExpr
  */
-static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCookedSources &cooked) {
+static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCookedSources &cooked)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
 
@@ -1816,10 +2122,14 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
             auto [line, col] = resolveLineColStmt(cooked, rhs.source);
 
             json.beginObject();
-            json.key("kind"); json.stringValue("assign");
-            json.key("line"); json.intValue(line);
-            json.key("lhs"); emitVariable(json, lhs);
-            json.key("rhs"); emitBodyExpr(json, rhs);
+            json.key("kind");
+            json.stringValue("assign");
+            json.key("line");
+            json.intValue(line);
+            json.key("lhs");
+            emitVariable(json, lhs);
+            json.key("rhs");
+            emitBodyExpr(json, rhs);
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::CallStmt>>) {
@@ -1827,7 +2137,8 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
             return true;
         } else if constexpr (std::is_same_v<T, fp::ContinueStmt>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("continue");
+            json.key("kind");
+            json.stringValue("continue");
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::IfStmt>>) {
@@ -1836,35 +2147,44 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
             const auto &inner = std::get<fp::UnlabeledStatement<fp::ActionStmt>>(ifs.t);
 
             json.beginObject();
-            json.key("kind"); json.stringValue("if_stmt");
-            json.key("cond"); emitBodyExpr(json, unwrapScalarLogicalExpr(cond));
-            json.key("stmt"); emitActionStmt(json, inner.statement, cooked);
+            json.key("kind");
+            json.stringValue("if_stmt");
+            json.key("cond");
+            emitBodyExpr(json, unwrapScalarLogicalExpr(cond));
+            json.key("stmt");
+            emitActionStmt(json, inner.statement, cooked);
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::ReturnStmt>>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("return");
+            json.key("kind");
+            json.stringValue("return");
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::StopStmt>>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("stop");
+            json.key("kind");
+            json.stringValue("stop");
             json.endObject();
             return true;
         } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::WriteStmt>>) {
             json.beginObject();
-            json.key("kind"); json.stringValue("write");
+            json.key("kind");
+            json.stringValue("write");
             json.endObject();
             return true;
         }
 
         return false;
-    }, a.u);
+    },
+                              a.u);
 
     if (!emitted) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
-        json.key("tag"); json.stringValue("action_stmt");
+        json.key("kind");
+        json.stringValue("unsupported");
+        json.key("tag");
+        json.stringValue("action_stmt");
         json.endObject();
     }
 }
@@ -1880,21 +2200,24 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
  * @see emitBlock
  * @see emitBodyExpr
  */
-static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::AllCookedSources &cooked) {
+static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::AllCookedSources &cooked)
+{
     const auto &ifThen = std::get<fp::Statement<fp::IfThenStmt>>(ifc.t);
     const auto &thenBlock = std::get<fp::Block>(ifc.t);
     const auto &elseIfBlocks = std::get<std::list<fp::IfConstruct::ElseIfBlock>>(ifc.t);
     const auto &elseBlockOpt = std::get<std::optional<fp::IfConstruct::ElseBlock>>(ifc.t);
 
     json.beginObject();
-    json.key("kind"); json.stringValue("if_construct");
+    json.key("kind");
+    json.stringValue("if_construct");
     json.key("branches");
     json.beginArray();
 
     json.beginObject();
     json.key("cond");
     emitBodyExpr(json, unwrapScalarLogicalExpr(std::get<fp::ScalarLogicalExpr>(ifThen.statement.t)));
-    json.key("body"); emitBlock(json, thenBlock, cooked);
+    json.key("body");
+    emitBlock(json, thenBlock, cooked);
     json.endObject();
 
     for (const fp::IfConstruct::ElseIfBlock &eib : elseIfBlocks) {
@@ -1904,7 +2227,8 @@ static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::Al
         json.beginObject();
         json.key("cond");
         emitBodyExpr(json, unwrapScalarLogicalExpr(std::get<fp::ScalarLogicalExpr>(stmt.statement.t)));
-        json.key("body"); emitBlock(json, blk, cooked);
+        json.key("body");
+        emitBlock(json, blk, cooked);
         json.endObject();
     }
 
@@ -1912,8 +2236,10 @@ static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::Al
         const auto &blk = std::get<fp::Block>(elseBlockOpt->t);
 
         json.beginObject();
-        json.key("cond"); json.nullValue();
-        json.key("body"); emitBlock(json, blk, cooked);
+        json.key("cond");
+        json.nullValue();
+        json.key("body");
+        emitBlock(json, blk, cooked);
         json.endObject();
     }
 
@@ -1930,40 +2256,52 @@ static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::Al
  * @see emitBlock
  * @see emitBodyExpr
  */
-static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::AllCookedSources &cooked) {
+static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::AllCookedSources &cooked)
+{
     const auto &doStmt = std::get<fp::Statement<fp::NonLabelDoStmt>>(dc.t);
     const auto &block = std::get<fp::Block>(dc.t);
     const auto &loopControlOpt = std::get<std::optional<fp::LoopControl>>(doStmt.statement.t);
 
     json.beginObject();
-    json.key("kind"); json.stringValue("do");
+    json.key("kind");
+    json.stringValue("do");
 
     bool handled = false;
     if (loopControlOpt) {
         handled = std::visit([&](const auto &alt) -> bool {
             using T = std::decay_t<decltype(alt)>;
             if constexpr (std::is_same_v<T, fp::LoopControl::Bounds>) {
-                json.key("mode"); json.stringValue("counted");
-                json.key("var"); json.stringValue(toLower(alt.Name().thing.ToString()));
-                json.key("lb"); emitBodyExpr(json, unwrapScalarExpr(alt.Lower()));
-                json.key("ub"); emitBodyExpr(json, unwrapScalarExpr(alt.Upper()));
+                json.key("mode");
+                json.stringValue("counted");
+                json.key("var");
+                json.stringValue(toLower(alt.Name().thing.ToString()));
+                json.key("lb");
+                emitBodyExpr(json, unwrapScalarExpr(alt.Lower()));
+                json.key("ub");
+                emitBodyExpr(json, unwrapScalarExpr(alt.Upper()));
                 json.key("step");
-                if (alt.Step()) emitBodyExpr(json, unwrapScalarExpr(*alt.Step())); else json.nullValue();
+                if (alt.Step()) emitBodyExpr(json, unwrapScalarExpr(*alt.Step()));
+                else json.nullValue();
                 return true;
             } else if constexpr (std::is_same_v<T, fp::ScalarLogicalExpr>) {
-                json.key("mode"); json.stringValue("while");
-                json.key("cond"); emitBodyExpr(json, unwrapScalarLogicalExpr(alt));
+                json.key("mode");
+                json.stringValue("while");
+                json.key("cond");
+                emitBodyExpr(json, unwrapScalarLogicalExpr(alt));
                 return true;
             }
             return false; // Concurrent (DO CONCURRENT)
-        }, loopControlOpt->u);
+        },
+                             loopControlOpt->u);
     }
 
     if (!handled) {
-        json.key("mode"); json.stringValue("unsupported");
+        json.key("mode");
+        json.stringValue("unsupported");
     }
 
-    json.key("body"); emitBlock(json, block, cooked);
+    json.key("body");
+    emitBlock(json, block, cooked);
     json.endObject();
 }
 
@@ -1990,7 +2328,8 @@ static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstr
  * @see emitIfConstruct
  * @see emitDoConstruct
  */
-static void emitExecutableConstruct(Json &json, const fp::ExecutableConstruct &ec, const fp::AllCookedSources &cooked) {
+static void emitExecutableConstruct(Json &json, const fp::ExecutableConstruct &ec, const fp::AllCookedSources &cooked)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::Statement<fp::ActionStmt>>) {
@@ -2004,17 +2343,21 @@ static void emitExecutableConstruct(Json &json, const fp::ExecutableConstruct &e
             return true;
         }
         return false;
-    }, ec.u);
+    },
+                              ec.u);
 
     if (!emitted) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
-        json.key("tag"); json.stringValue("executable_construct");
+        json.key("kind");
+        json.stringValue("unsupported");
+        json.key("tag");
+        json.stringValue("executable_construct");
         json.endObject();
     }
 }
 
-static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstruct &epc, const fp::AllCookedSources &cooked) {
+static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstruct &epc, const fp::AllCookedSources &cooked)
+{
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, fp::ExecutableConstruct>) {
@@ -2025,17 +2368,21 @@ static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstr
             return true;
         }
         return false;
-    }, epc.u);
+    },
+                              epc.u);
 
     if (!emitted) {
         json.beginObject();
-        json.key("kind"); json.stringValue("unsupported");
-        json.key("tag"); json.stringValue("execution_part_construct");
+        json.key("kind");
+        json.stringValue("unsupported");
+        json.key("tag");
+        json.stringValue("execution_part_construct");
         json.endObject();
     }
 }
 
-static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked) {
+static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked)
+{
     json.beginArray();
     for (const fp::ExecutionPartConstruct &epc : block) emitExecutionPartConstruct(json, epc, cooked);
     json.endArray();
@@ -2074,8 +2421,8 @@ static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSou
  * @see DeclCollector
  */
 struct Scanner {
-    Json &json;                            // open events array we append into
-    const fp::AllCookedSources &cooked;    // for mapping CharBlocks -> line/col
+    Json &json;                         // open events array we append into
+    const fp::AllCookedSources &cooked; // for mapping CharBlocks -> line/col
 
     /**
      * @brief Pre(CallStmt): triggered for every `call ...(...)` statement.
@@ -2085,7 +2432,8 @@ struct Scanner {
      * @param call Parse-tree CALL statement.
      * @return Always `true`, so Flang continues walking the subtree.
      */
-    bool Pre(const fp::CallStmt &call) {
+    bool Pre(const fp::CallStmt &call)
+    {
         // CallStmt's shape has drifted across LLVM releases:
         //   LLVM ~17: WRAPPER_CLASS_BOILERPLATE(CallStmt, Call) -> call.v
         //   LLVM ~18: struct with `Call call; optional<Chevrons> chevrons;`
@@ -2109,7 +2457,8 @@ struct Scanner {
             } else {
                 return false;
             }
-        }, pd.u);
+        },
+                                  pd.u);
 
         if (!gotName) return true;
 
@@ -2137,7 +2486,8 @@ struct Scanner {
      * @param src Cooked-source character range.
      * @return `(line, column)` in the original source, or `(0, 0)` on failure.
      */
-    std::pair<int, int> resolveLineCol(fp::CharBlock src) {
+    std::pair<int, int> resolveLineCol(fp::CharBlock src)
+    {
         if (src.empty()) return {0, 0};
         auto prov = cooked.GetProvenanceRange(src);
         if (!prov) return {0, 0};
@@ -2154,14 +2504,18 @@ struct Scanner {
     // closes it before returning. They are intentionally small and similar:
     // the JSON contract lives in the comments at the top of the file.
     void emitLoop(const std::string &name, int line, int col,
-                  const std::list<fp::ActualArgSpec> &args) {
+                  const std::list<fp::ActualArgSpec> &args)
+    {
         json.beginObject();
-        json.key("kind"); json.stringValue(name);   // op_par_loop_<N>
+        json.key("kind");
+        json.stringValue(name); // op_par_loop_<N>
         json.key("location");
         {
             json.beginObject();
-            json.key("line"); json.intValue(line);
-            json.key("column"); json.intValue(col);
+            json.key("line");
+            json.intValue(line);
+            json.key("column");
+            json.intValue(col);
             json.endObject();
         }
         json.key("args");
@@ -2169,14 +2523,18 @@ struct Scanner {
         json.endObject();
     }
 
-    void emitConst(int line, int col, const std::list<fp::ActualArgSpec> &args) {
+    void emitConst(int line, int col, const std::list<fp::ActualArgSpec> &args)
+    {
         json.beginObject();
-        json.key("kind"); json.stringValue("op_decl_const");
+        json.key("kind");
+        json.stringValue("op_decl_const");
         json.key("location");
         {
             json.beginObject();
-            json.key("line"); json.intValue(line);
-            json.key("column"); json.intValue(col);
+            json.key("line");
+            json.intValue(line);
+            json.key("column");
+            json.intValue(col);
             json.endObject();
         }
         json.key("args");
@@ -2209,7 +2567,8 @@ struct Scanner {
      * @param b End of the cooked-source span (typically the END statement).
      * @return A CharBlock covering `[a.begin(), b.end())`.
      */
-    static fp::CharBlock spanningRange(fp::CharBlock a, fp::CharBlock b) {
+    static fp::CharBlock spanningRange(fp::CharBlock a, fp::CharBlock b)
+    {
         if (a.empty()) return b;
         if (b.empty()) return a;
         const char *start = a.begin();
@@ -2224,7 +2583,8 @@ struct Scanner {
      * @param sub Parse-tree node being visited.
      * @return Always `true`, so Flang continues walking the subtree.
      */
-    bool Pre(const fp::SubroutineSubprogram &sub) {
+    bool Pre(const fp::SubroutineSubprogram &sub)
+    {
         // SubroutineSubprogram::t =
         //   tuple< Statement<SubroutineStmt>, SpecificationPart,
         //          ExecutionPart, optional<InternalSubprogramPart>,
@@ -2250,7 +2610,8 @@ struct Scanner {
                 if constexpr (std::is_same_v<T, fp::Name>) {
                     parameters.push_back(toLower(inner.ToString()));
                 }
-            }, arg.u);
+            },
+                       arg.u);
         }
 
         // Walk this subprogram's subtree to collect candidate dependency
@@ -2279,7 +2640,8 @@ struct Scanner {
      * @param fn Function subprogram.
      * @return Always `true`, so Flang continues walking the subtree.
      */
-    bool Pre(const fp::FunctionSubprogram &fn) {
+    bool Pre(const fp::FunctionSubprogram &fn)
+    {
         // FunctionSubprogram::t =
         //   tuple< Statement<FunctionStmt>, SpecificationPart,
         //          ExecutionPart, optional<InternalSubprogramPart>,
@@ -2318,7 +2680,8 @@ struct Scanner {
      * @param fnStmt Function statement whose RESULT clause is read.
      * @return Lower-cased RESULT name, or nullopt if no RESULT clause was written.
      */
-    static std::optional<std::string> resultName(const fp::FunctionStmt &fnStmt) {
+    static std::optional<std::string> resultName(const fp::FunctionStmt &fnStmt)
+    {
         const auto &suffixOpt = std::get<std::optional<fp::Suffix>>(fnStmt.t);
         if (!suffixOpt) return std::nullopt;
         const auto &nameOpt = std::get<std::optional<fp::Name>>(suffixOpt->t);
@@ -2332,7 +2695,8 @@ struct Scanner {
      * @param json JSON writer to append the type node (or JSON null) into.
      * @param fnStmt Function statement whose prefix type, if any, is emitted.
      */
-    static void resultType(Json &json, const fp::FunctionStmt &fnStmt) {
+    static void resultType(Json &json, const fp::FunctionStmt &fnStmt)
+    {
         const auto &prefixes = std::get<std::list<fp::PrefixSpec>>(fnStmt.t);
         for (const fp::PrefixSpec &spec : prefixes) {
             if (const auto *dts = std::get_if<fp::DeclarationTypeSpec>(&spec.u)) {
@@ -2371,15 +2735,20 @@ struct Scanner {
                         fp::CharBlock bodyRange,
                         const fp::SpecificationPart &spec,
                         const fp::ExecutionPart &exec,
-                        const fp::FunctionStmt *fnStmt) {
+                        const fp::FunctionStmt *fnStmt)
+    {
         json.beginObject();
-        json.key("kind"); json.stringValue(kind);
-        json.key("name"); json.stringValue(name);
+        json.key("kind");
+        json.stringValue(kind);
+        json.key("name");
+        json.stringValue(name);
         json.key("location");
         {
             json.beginObject();
-            json.key("line"); json.intValue(line);
-            json.key("column"); json.intValue(col);
+            json.key("line");
+            json.intValue(line);
+            json.key("column");
+            json.intValue(col);
             json.endObject();
         }
         json.key("parameters");
@@ -2423,8 +2792,10 @@ struct Scanner {
         assignmentsJson.endArray();
         callsJson.endArray();
 
-        json.key("assignments"); json.rawValue(assignmentsJson.str());
-        json.key("calls"); json.rawValue(callsJson.str());
+        json.key("assignments");
+        json.rawValue(assignmentsJson.str());
+        json.key("calls");
+        json.rawValue(callsJson.str());
 
         // Stage 3 data: full typed declarations and a nested statement
         // tree (see the doc comments above DeclCollector / emitBlock).
@@ -2446,7 +2817,8 @@ struct Scanner {
         if (fnStmt != nullptr) {
             json.key("result_name");
             auto rn = resultName(*fnStmt);
-            if (rn) json.stringValue(*rn); else json.nullValue();
+            if (rn) json.stringValue(*rn);
+            else json.nullValue();
 
             json.key("result_type");
             resultType(json, *fnStmt);
@@ -2458,8 +2830,14 @@ struct Scanner {
     // Default no-op fallbacks. Required by Flang's Walk() so that every
     // node in the parse tree has a matching Pre()/Post() pair regardless of
     // whether we actually care about it.
-    template <typename T> bool Pre(const T &) { return true; }
-    template <typename T> void Post(const T &) {}
+    template <typename T>
+    bool Pre(const T &)
+    {
+        return true;
+    }
+    template <typename T>
+    void Post(const T &)
+    {}
 };
 
 /**
@@ -2469,7 +2847,8 @@ struct Scanner {
  *
  * @return The entire stdin stream as a string.
  */
-static std::string slurpStdin() {
+static std::string slurpStdin()
+{
     std::ostringstream ss;
     ss << std::cin.rdbuf();
     return ss.str();
@@ -2497,7 +2876,8 @@ static std::string slurpStdin() {
  */
 static std::string writeTempFile(const std::string &contents,
                                  const std::string &preferredDir = {},
-                                 int uniqueSuffix = 0) {
+                                 int uniqueSuffix = 0)
+{
     namespace fs = std::filesystem;
     const std::string name = "op2-flang-scan-" + std::to_string(::getpid()) +
                              "-" + std::to_string(uniqueSuffix) + ".F90";
@@ -2536,7 +2916,8 @@ static std::string writeTempFile(const std::string &contents,
 
 using Clock = std::chrono::steady_clock;
 
-static double msSince(Clock::time_point t0) {
+static double msSince(Clock::time_point t0)
+{
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
@@ -2546,7 +2927,8 @@ static double msSince(Clock::time_point t0) {
  * @param path Path whose parent directory is returned.
  * @return Parent directory of `path`, or empty if there is none.
  */
-static std::string parentDirOf(const std::string &path) {
+static std::string parentDirOf(const std::string &path)
+{
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::path p = fs::absolute(fs::path(path), ec);
@@ -2567,17 +2949,30 @@ static std::string parentDirOf(const std::string &path) {
  * @return `s` with JSON structural characters escaped.
  * @see Json::writeString
  */
-static std::string jsonEscape(const std::string &s) {
+static std::string jsonEscape(const std::string &s)
+{
     std::string out;
     out.reserve(s.size() + 8);
     for (char c : s) {
         switch (c) {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        default: out += c; break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        default:
+            out += c;
+            break;
         }
     }
     return out;
@@ -2608,7 +3003,8 @@ static int scanOneUnit(const std::string &reportedPath,
                        const std::vector<std::string> &includeDirs,
                        bool emitTiming,
                        int tempSuffix,
-                       Clock::time_point tSession0) {
+                       Clock::time_point tSession0)
+{
     const auto tUnit = Clock::now();
     std::string path = onDiskPath;
     std::string originalPath = reportedPath.empty() ? onDiskPath : reportedPath;
@@ -2731,7 +3127,8 @@ static int scanOneUnit(const std::string &reportedPath,
  * @return 0 unless every unit failed (then 1); 2 on protocol errors.
  * @see scanOneUnit
  */
-static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTiming) {
+static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTiming)
+{
     const auto tSession0 = Clock::now();
     std::string magic;
     if (!std::getline(std::cin, magic)) {
@@ -2820,7 +3217,8 @@ static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTi
  * @see scanOneUnit
  * @see runBatchMode
  */
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     // Recognised flags:
     //   --stdin            Force stdin mode even if a path is given.
     //   --batch            Multi-unit stdin protocol (see runBatchMode).
