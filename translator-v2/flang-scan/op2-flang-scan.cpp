@@ -1,91 +1,3 @@
-// =============================================================================
-// op2-flang-scan: Stage 1 parser for the OP2 Fortran translator.
-// =============================================================================
-//
-// This is a small stand-alone executable that links against LLVM Flang's
-// parser library and is invoked as a subprocess by the Python translator
-// (see translator-v2/op2-translator/fortran/flang_parser.py).
-//
-// What it does
-// ------------
-// It reads a Fortran source file, asks Flang to parse it, walks the parse
-// tree, and writes a single JSON document to stdout describing:
-//
-//   1. Every `op_par_loop_N(...)` call site (with its full argument tree).
-//   2. Every `op_decl_const(...)` call site (with its full argument tree).
-//   3. Every top-level subroutine and function definition (name,
-//      parameter list, dependency call/reference names, and a textual
-//      copy of the body so the Python side can rewrite kernels without
-//      a fparser2 AST).
-//
-// Why this layer exists
-// ---------------------
-// The translator's original Stage 1 was written in pure Python on top of
-// fparser2. That's portable and easy to hack on, but slow and lossy for
-// some Fortran constructs. Routing Stage 1 through Flang gives us:
-//
-//   * A standards-tracking parser maintained by the Flang team.
-//   * Faster parsing for large translation units (it's compiled C++).
-//   * A single source of truth for parse-tree structure when we eventually
-//     want to push more of the kernel rewriting work down here too.
-//
-// What it deliberately does NOT do
-// --------------------------------
-//   * No semantic analysis. Flang's later semantics passes can disambiguate
-//     things like "is `q(i)` an array indexing or a function call?", but we
-//     stop after Parse() and let the Python side filter / cross-reference.
-//   * No code generation. We're a parser-only tool; we don't lower to MLIR
-//     or LLVM IR.
-//   * No cross-file parse. Flang's Prescan/Parse is one translation unit per
-//     call. The Python driver may still invoke us once with --batch to parse
-//     many TUs sequentially in a single process (amortising LLVM binary
-//     load / process spawn).
-//
-// JSON output contract
-// --------------------
-// The shape consumed by the Python side is roughly:
-//
-//   {
-//     "path": "<original input path>",
-//     "events": [
-//       {"kind": "op_par_loop_N", "location": {...}, "args": [...] },
-//       {"kind": "op_decl_const", "location": {...}, "args": [...] },
-//       {"kind": "subroutine_subprogram"|"function_subprogram",
-//        "name": "...", "location": {...}, "parameters": [...],
-//        "depends": [...], "source": "..."},
-//       ...
-//     ]
-//   }
-//
-// Each `args` entry is one of: {"kind": "name"|"int"|"string"|"call"|"raw"}.
-// See the "Expression serialization" section below for details.
-//
-// CLI
-// ---
-//   op2-flang-scan [--stdin] [--timing] [--path <reported-path>] [-I <dir>]... [path]
-//   op2-flang-scan --batch [--timing] [-I <dir>]...
-//
-// When --stdin is given (or no path argument is supplied), the source is
-// slurped from stdin into a temp file and that temp file is fed to Flang.
-// The --path option overrides the path that we report in the JSON output
-// (handy when the actual input came from stdin and the caller wants the
-// JSON to mention the original file name). The temp file is preferably
-// written next to --path, and that directory (plus any -I dirs) is added
-// to Flang's INCLUDE search path so Fortran INCLUDE of sibling .inc files
-// resolves the same way as under fparser2.
-//
-// --batch reads a framed multi-unit stream from stdin (see runBatchMode)
-// and emits one JSON object per unit as NDJSON on stdout. Each unit still
-// gets its own Prescan+Parse; the win is a single process / LLVM load.
-// =============================================================================
-
-// -----------------------------------------------------------------------------
-// Flang public headers used by this tool.
-//
-// We only depend on the parser layer (parsing.h, parse-tree*.h, provenance.h,
-// source.h, message.h). Everything from Sema, FIR, MLIR or the driver is
-// intentionally excluded so the link surface stays small.
-// -----------------------------------------------------------------------------
 #include "flang/Parser/parsing.h"
 #include "flang/Parser/parse-tree.h"
 #include "flang/Parser/parse-tree-visitor.h"
@@ -95,9 +7,9 @@
 
 #include "llvm/Support/raw_ostream.h"
 
-// Standard library: ctype/string utilities, the small JSON buffer, the parse
+// import ctype/string utilities, the small JSON buffer, the parse
 // tree variant tags (variant), and the OS shims for reading stdin / picking
-// a temp path.
+// a temp path from the standard library
 #include <cctype>
 #include <chrono>
 #include <cstdint>
