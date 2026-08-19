@@ -32,7 +32,7 @@
 #include <unistd.h> // ::getpid on POSIX
 #endif
 
-// Short alias for the namespace we live in for 95 % of this file.
+// namespace alias for LLVM Flang's parse-tree API
 namespace fp = Fortran::parser;
 
 /**
@@ -67,6 +67,7 @@ public:
         out_ << "{";
         first_.push_back(true);
     }
+
     void endObject()
     {
         out_ << "}";
@@ -80,6 +81,7 @@ public:
         out_ << "[";
         first_.push_back(true);
     }
+
     void endArray()
     {
         out_ << "]";
@@ -114,18 +116,21 @@ public:
         writeString(s);
         markWrote();
     }
+
     void intValue(int64_t v)
     {
         comma();
         out_ << v;
         markWrote();
     }
+
     void boolValue(bool b)
     {
         comma();
         out_ << (b ? "true" : "false");
         markWrote();
     }
+
     void nullValue()
     {
         comma();
@@ -3269,6 +3274,5 @@ int main(int argc, char **argv)
     if (readStdin || path.empty()) {
         sourceBytes = slurpStdin();
     }
-    return scanOneUnit(originalPath, path, sourceBytes, includeDirs, emitTiming,
-                       /*tempSuffix=*/0, tSession0);
+    return scanOneUnit(originalPath, path, sourceBytes, includeDirs, emitTiming, /*tempSuffix=*/0, tSession0);
 }
