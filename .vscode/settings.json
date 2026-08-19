@@ -1,3 +1,17 @@
 {
-    "cmake.sourceDirectory": "C:/repos/OP2-Common/translator-v2/flang-scan"
+    "cmake.sourceDirectory": "C:/repos/OP2-Common/translator-v2/flang-scan",
+    "cSpell.words": [
+        "amortises",
+        "amortising",
+        "behaviour",
+        "cuda",
+        "flang",
+        "Flang",
+        "fparser",
+        "materialise",
+        "multiprocess",
+        "NVGPUCTRPERM",
+        "Prescan",
+        "PYTHONUNBUFFERED"
+    ]
 }
