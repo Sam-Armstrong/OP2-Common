@@ -1,0 +1,11 @@
+{
+  "name": "out_of_range",
+  "category": "pipeline",
+  "description": "F2018 OUT_OF_RANGE() as an ordinary function reference",
+  "fortran_standard": "Fortran 2018",
+  "notes": "Parse-only: OUT_OF_RANGE is accepted as a generic function call by both parsers",
+  "sources": ["out_of_range.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

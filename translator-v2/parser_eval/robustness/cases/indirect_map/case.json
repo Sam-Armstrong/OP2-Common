@@ -1,0 +1,14 @@
+{
+  "category": "pipeline",
+  "description": "Indirect op_arg_dat via a 2-node map (OP_INC on mapped dat)",
+  "notes": "Stage-1 map_idx / map_ptr extraction on both parsers",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "indirect_map",
+  "sources": [
+    "indirect_map.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}

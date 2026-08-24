@@ -2,6 +2,11 @@
   "name": "implicit_none_external",
   "description": "F2018 IMPLICIT NONE (TYPE, EXTERNAL)",
   "fparser2_reason": "fparser2 0.2.0 (std=f2008) does not parse IMPLICIT NONE (TYPE, EXTERNAL) (Fortran 2018)",
-  "sources": ["implicit_none_external.F90"],
-  "targets": ["seq"]
+  "sources": [
+    "implicit_none_external.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "fortran_standard": "Fortran 2018"
 }

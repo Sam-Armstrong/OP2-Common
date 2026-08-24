@@ -1,0 +1,13 @@
+{
+  "category": "pipeline",
+  "description": "Mixed-case OP2 API and kernel names",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "mixed_case_api",
+  "sources": [
+    "mixed_case_api.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}

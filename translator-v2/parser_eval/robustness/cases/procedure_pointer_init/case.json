@@ -10,5 +10,6 @@
     "seq"
   ],
   "expect_fparser2": "fail",
-  "expect_flang": "fail"
+  "expect_flang": "fail",
+  "fortran_standard": "Fortran 2008"
 }

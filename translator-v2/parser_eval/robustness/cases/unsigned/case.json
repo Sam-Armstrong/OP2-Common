@@ -2,6 +2,11 @@
   "name": "unsigned",
   "description": "F2023 UNSIGNED integer type and literal",
   "fparser2_reason": "fparser2 0.2.0 (std=f2008) has no support for Fortran 2023 UNSIGNED types/literals",
-  "sources": ["unsigned.F90"],
-  "targets": ["seq"]
+  "sources": [
+    "unsigned.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "fortran_standard": "Fortran 2023"
 }

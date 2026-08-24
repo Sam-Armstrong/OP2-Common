@@ -1,0 +1,11 @@
+{
+  "name": "team_number",
+  "category": "pipeline",
+  "description": "F2018 TEAM_NUMBER() as an ordinary function reference",
+  "fortran_standard": "Fortran 2018",
+  "notes": "Parse-only: TEAM_NUMBER() is accepted as a generic function call by both parsers",
+  "sources": ["team_number.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

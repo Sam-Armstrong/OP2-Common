@@ -1,0 +1,11 @@
+{
+  "name": "co_sum",
+  "category": "pipeline",
+  "description": "F2018 CO_SUM written as an ordinary CALL (parse-only; no semantic intrinsic table)",
+  "fortran_standard": "Fortran 2018",
+  "notes": "Neither parser does semantic analysis, so CALL CO_SUM parses like any other subroutine",
+  "sources": ["co_sum.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

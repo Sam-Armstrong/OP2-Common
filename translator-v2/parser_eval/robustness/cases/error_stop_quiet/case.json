@@ -2,6 +2,11 @@
   "name": "error_stop_quiet",
   "description": "F2018 ERROR STOP with QUIET= specifier",
   "fparser2_reason": "fparser2 0.2.0 (std=f2008) does not parse ERROR STOP ..., QUIET= (Fortran 2018)",
-  "sources": ["error_stop_quiet.F90"],
-  "targets": ["seq"]
+  "sources": [
+    "error_stop_quiet.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "fortran_standard": "Fortran 2018"
 }

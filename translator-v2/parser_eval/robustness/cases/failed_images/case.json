@@ -1,0 +1,11 @@
+{
+  "name": "failed_images",
+  "category": "pipeline",
+  "description": "F2018 FAILED_IMAGES() as an ordinary function reference",
+  "fortran_standard": "Fortran 2018",
+  "notes": "Parse-only: FAILED_IMAGES() is accepted as a generic function call by both parsers",
+  "sources": ["failed_images.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

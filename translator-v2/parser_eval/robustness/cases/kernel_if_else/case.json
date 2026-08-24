@@ -1,0 +1,13 @@
+{
+  "category": "pipeline",
+  "description": "Kernel IF / ELSE IF / ELSE construct (Stage-3 control flow)",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "kernel_if_else",
+  "sources": [
+    "kernel_if_else.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}

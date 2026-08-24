@@ -1,0 +1,13 @@
+{
+  "category": "pipeline",
+  "description": "Inactive #ifdef must not extract a missing kernel",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "ifdef_around_loop",
+  "sources": [
+    "ifdef_around_loop.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}

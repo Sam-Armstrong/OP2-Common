@@ -2,6 +2,11 @@
   "name": "do_concurrent_shared",
   "description": "F2018 DO CONCURRENT with SHARED locality specifier",
   "fparser2_reason": "fparser2 0.2.0 (std=f2008) has no support for F2018 concurrent-locality (SHARED/LOCAL/REDUCE); see stfc/fparser#409",
-  "sources": ["do_concurrent_shared.F90"],
-  "targets": ["seq"]
+  "sources": [
+    "do_concurrent_shared.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "fortran_standard": "Fortran 2018"
 }

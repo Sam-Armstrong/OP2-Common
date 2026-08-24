@@ -1,0 +1,11 @@
+{
+  "name": "contiguous_dummy",
+  "category": "pipeline",
+  "description": "F2008 CONTIGUOUS dummy argument on a host helper",
+  "fortran_standard": "Fortran 2008",
+  "notes": "fparser2 0.2.4 already accepts CONTIGUOUS; both parsers translate",
+  "sources": ["contiguous_dummy.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

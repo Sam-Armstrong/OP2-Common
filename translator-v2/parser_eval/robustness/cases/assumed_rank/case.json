@@ -2,6 +2,11 @@
   "name": "assumed_rank",
   "description": "F2018 assumed-rank dummy argument (x(..))",
   "fparser2_reason": "fparser2 0.2.0 (std=f2008) does not parse assumed-rank (..) array specs (Fortran 2018)",
-  "sources": ["assumed_rank.F90"],
-  "targets": ["seq"]
+  "sources": [
+    "assumed_rank.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "fortran_standard": "Fortran 2018"
 }

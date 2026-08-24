@@ -1,0 +1,11 @@
+{
+  "name": "valid_slice_gbl",
+  "category": "pipeline",
+  "description": "Validation: triplet slice on a dim>1 OP_INC global",
+  "notes": "rms(:) triggers stride-insertion incompatibility on both validators",
+  "sources": ["valid_slice_gbl.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass_with_warning",
+  "expect_flang": "pass_with_warning",
+  "expected_warnings": ["element-wise access incompatible with stride insertion"]
+}

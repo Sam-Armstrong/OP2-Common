@@ -1,0 +1,11 @@
+{
+  "name": "critical_construct",
+  "category": "pipeline",
+  "description": "F2008 CRITICAL / END CRITICAL construct in host code",
+  "fortran_standard": "Fortran 2008",
+  "notes": "fparser2 0.2.4 already parses CRITICAL; both parsers translate",
+  "sources": ["critical_construct.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "pass",
+  "expect_flang": "pass"
+}

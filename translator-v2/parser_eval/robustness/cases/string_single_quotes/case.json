@@ -1,0 +1,13 @@
+{
+  "category": "pipeline",
+  "description": "Single-quoted OP2 type and name strings",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "string_single_quotes",
+  "sources": [
+    "string_single_quotes.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}

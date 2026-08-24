@@ -1,0 +1,11 @@
+{
+  "name": "coarray_decl",
+  "category": "syntax_gap",
+  "description": "F2008 coarray declaration with [*] codimension and SYNC ALL",
+  "fortran_standard": "Fortran 2008",
+  "fparser2_reason": "fparser2 0.2.4 (std=f2008) does not parse coarray [*] syntax",
+  "sources": ["coarray_decl.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}

@@ -1,0 +1,13 @@
+{
+  "category": "pipeline",
+  "description": "Global OP_INC and OP_MAX reductions",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "gbl_reduction",
+  "sources": [
+    "gbl_reduction.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}

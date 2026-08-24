@@ -13,6 +13,7 @@ Optional case.json fields:
     pass | fail | fallback | pass_with_warning
   expected_warnings: substrings that must appear in combined output
   translator_flags: extra CLI flags
+  fortran_standard: e.g. "Fortran 2018" (printed for standards-coverage cases)
   fparser2_reason / notes: free-text for the report
 
 Usage:
@@ -66,6 +67,7 @@ class CaseResult:
     expect_fparser2: str
     expect_flang: str
     expected_warnings: List[str]
+    fortran_standard: str = ""
     outcomes: Dict[str, ParserOutcome] = field(default_factory=dict)
     mismatches: List[str] = field(default_factory=list)
 
@@ -97,6 +99,7 @@ def load_cases(
         data.setdefault("expect_flang", "pass")
         data.setdefault("expected_warnings", [])
         data.setdefault("translator_flags", [])
+        data.setdefault("fortran_standard", "")
         data.setdefault("notes", data.get("fparser2_reason", ""))
         if only and data.get("name") not in only:
             continue
@@ -251,6 +254,7 @@ def evaluate_case(root: Path, case: Dict[str, Any], work: Path) -> CaseResult:
         expect_fparser2=case.get("expect_fparser2", "fail"),
         expect_flang=case.get("expect_flang", "pass"),
         expected_warnings=list(case.get("expected_warnings") or []),
+        fortran_standard=str(case.get("fortran_standard") or ""),
     )
     target = (case.get("targets") or ["seq"])[0]
 
@@ -294,6 +298,8 @@ def print_report(results: List[CaseResult]) -> int:
             print()
             print(f"## [{status}] {r.name}")
             print(f"   {r.description}")
+            if r.fortran_standard:
+                print(f"   standard: {r.fortran_standard}")
             if r.notes:
                 print(f"   notes: {r.notes}")
             fp = r.outcomes["fparser2"]

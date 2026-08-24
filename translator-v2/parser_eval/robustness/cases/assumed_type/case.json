@@ -2,6 +2,11 @@
   "name": "assumed_type",
   "description": "F2018 assumed-type dummy argument type(*)",
   "fparser2_reason": "fparser2 0.2.0 (std=f2008) does not parse assumed-type TYPE(*) dummies (Fortran 2018)",
-  "sources": ["assumed_type.F90"],
-  "targets": ["seq"]
+  "sources": [
+    "assumed_type.F90"
+  ],
+  "targets": [
+    "seq"
+  ],
+  "fortran_standard": "Fortran 2018"
 }

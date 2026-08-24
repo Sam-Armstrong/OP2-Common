@@ -1,0 +1,13 @@
+{
+  "category": "pipeline",
+  "description": "op_par_loop nested inside host IF (host rewrite)",
+  "expect_fparser2": "pass",
+  "expect_flang": "pass",
+  "name": "loop_inside_if",
+  "sources": [
+    "loop_inside_if.F90"
+  ],
+  "targets": [
+    "seq"
+  ]
+}
