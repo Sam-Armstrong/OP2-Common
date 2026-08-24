@@ -7,6 +7,8 @@ Case kinds (case.json "category"):
   negative_control — both parsers expected to fail (document limits)
   pipeline         — both parse; exercises OP2 Flang path (validation,
                      multi-file, macros, funcref, Stage-1 fallback, …)
+  fparser2_gap     — valid F2003/F2008 fparser2 rejects (parser bug, not a
+                     newer Fortran standard); Flang should translate
 
 Optional case.json fields:
   expect_fparser2 / expect_flang:
@@ -333,7 +335,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--categories",
         nargs="+",
-        help="subset of categories (syntax_gap, negative_control, pipeline, flang_gap)",
+        help="subset of categories (syntax_gap, negative_control, pipeline, flang_gap, fparser2_gap)",
     )
     ap.add_argument("--keep-work", type=Path, help="keep translator outputs")
     args = ap.parse_args(argv)

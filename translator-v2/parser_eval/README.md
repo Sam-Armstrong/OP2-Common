@@ -71,6 +71,7 @@ bash translator-v2/parser_eval/robustness/run_robustness.sh --cases assumed_rank
 | Category | Intent | Typical outcome |
 |----------|--------|-----------------|
 | `syntax_gap` | **Standards coverage** — grammar fparser2 cannot parse | fparser2 **fail**, Flang **pass** |
+| `fparser2_gap` | **Parser bugs** on valid F2003/F2008 (not a newer standard) | fparser2 **fail**, Flang **pass** |
 | `negative_control` | Constructs **neither** parser handles on this toolchain | both **fail** |
 | `pipeline` | OP2 robustness edge cases (API, kernels, preprocess, validation) | both **pass** (or Flang `fallback` / `pass_with_warning`) |
 | `flang_gap` | Former Flang-only INCLUDE path bugs (now fixed) | both **pass** natively |
@@ -83,19 +84,21 @@ extraction, but it is a Fortran 2018 syntax gap (fparser2 fail / Flang pass).
 ## Robustness results
 
 Recorded **24 August 2026** against fparser **0.2.4** (`std=f2008`) and the
-built `op2-flang-scan`. **67/67 cases matched their expected outcomes.**
+built `op2-flang-scan`. **69 cases** in the suite (67 previously matching, plus
+2 new `fparser2_gap` cases verified the same day).
 
 | Category | Cases | Result |
 |----------|------:|--------|
 | `syntax_gap` (standards coverage) | 23 | 23/23 OK |
+| `fparser2_gap` (parser bugs on claimed-standard Fortran) | 2 | 2/2 OK |
 | `pipeline` (OP2 robustness) | 39 | 39/39 OK |
 | `flang_gap` (Fortran `INCLUDE`) | 3 | 3/3 OK |
 | `negative_control` | 2 | 2/2 OK |
-| **Total** | **67** | **67/67 OK** |
+| **Total** | **69** | **69/69 OK** |
 
 Headline split for the write-up:
 
-- **24 cases**: fparser2 **fails**, Flang **translates** (23 `syntax_gap` + `syntax_in_kernel`).
+- **26 cases**: fparser2 **fails**, Flang **translates** (23 `syntax_gap` + `syntax_in_kernel` + 2 `fparser2_gap`).
 - **38 cases**: **both parsers translate** (native Flang path, no fparser2 fallback), including 8 `pass_with_warning` validation cases.
 - **1 case**: Flang Stage-1 **fallback** to fparser2 then succeeds (`stage1_scan_fallback`).
 - **2 cases**: **both fail** (`enumeration_type`, `procedure_pointer_init`).
@@ -144,6 +147,25 @@ Related (filed under `pipeline`, same fail/pass pattern):
 
 Counts among the 23 `syntax_gap` cases: **4× Fortran 2008**, **15× Fortran 2018**,
 **4× Fortran 2023**.
+
+### fparser2 parser bugs (`fparser2_gap`) — fparser2 fail, Flang pass
+
+These are **not** newer-standard gaps. The Fortran is valid under the standard
+fparser2 claims (Fortran 2003 / the F2008 subset). fparser2 0.2.4 rejects it
+anyway ([stfc/fparser#334](https://github.com/stfc/fparser/issues/334)); LLVM
+Flang parses it and the OP2 Flang path translates without fallback.
+
+Control: `integer, pointer :: ptr => null()` **does** parse on fparser2 (probed).
+Only initialisation to a **named target** fails.
+
+| Case | Fortran standard | Construct | fparser2 | Flang |
+|------|------------------|-----------|----------|-------|
+| `pointer_init_target` | **Fortran 2003** | `integer, pointer :: ptr => var` | fail | pass |
+| `array_pointer_init` | **Fortran 2003** | `integer, pointer :: p(:) => a` | fail | pass |
+
+Related existing case: `procedure_pointer_init` uses `procedure(cb), pointer :: p => dummy`. That is also a named-target init, but **both** parsers reject it on this toolchain, so it stays a `negative_control` rather than a Flang-only win.
+
+A broader probe of F2003 / source-form constructs (ASSOCIATE, SELECT TYPE, ENUM BIND(C), type-bound procedures, OpenMP sentinels, Cray pointers, nested CONTAINS, `#line`-style markers, etc.) found **no other** fparser2-fail / Flang-pass pairs that were not already either F2008 coarray syntax (`[*]`, `SYNC IMAGES` — covered by `coarray_decl` / `sync_all`) or the pointer-init bug above.
 
 ### Negative controls — both fail
 
@@ -252,10 +274,15 @@ fparser2 does.
 
 ### Notes for the write-up
 
-- **Grammar vs names.** True Flang wins are *syntax* (new statement forms,
-  assumed-rank `(..)`, `IMPORT, ALL`, unsigned types, conditional
-  expressions). A new *intrinsic name* such as `IMAGE_STATUS` is not a parse
-  failure for fparser2, because Stage 1 never consults an intrinsic table.
+- **Grammar vs names.** True Flang *standards* wins are new *syntax* (new
+  statement forms, assumed-rank `(..)`, `IMPORT, ALL`, unsigned types,
+  conditional expressions). A new *intrinsic name* such as `IMAGE_STATUS` is
+  not a parse failure for fparser2, because Stage 1 never consults an
+  intrinsic table.
+- **Parser bugs vs standards.** The only non-standard Flang-only wins found
+  on this pin are data-pointer initialisations to a named target
+  (`pointer_init_target`, `array_pointer_init`; [stfc/fparser#334](https://github.com/stfc/fparser/issues/334)).
+  `INTEGER, POINTER :: p => NULL()` parses on fparser2; `=> var` does not.
 - **Kernel bodies matter.** `syntax_in_kernel` is the case that matches
   production: modern Fortran inside the extracted kernel, not only host setup.
 - **Parity.** On ordinary OP2 Fortran (maps, reductions, `op_arg_idx`,

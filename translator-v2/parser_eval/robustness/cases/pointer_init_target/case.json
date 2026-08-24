@@ -1,0 +1,11 @@
+{
+  "name": "pointer_init_target",
+  "category": "fparser2_gap",
+  "description": "F2003/F2008 data-pointer init to a non-null target (ptr => var); fparser2 bug, not a newer standard",
+  "fortran_standard": "Fortran 2003",
+  "notes": "stfc/fparser#334: INTEGER, POINTER :: ptr => var is valid; NULL() init parses, named-target init does not. Flang accepts it.",
+  "sources": ["pointer_init_target.F90"],
+  "targets": ["seq"],
+  "expect_fparser2": "fail",
+  "expect_flang": "pass"
+}

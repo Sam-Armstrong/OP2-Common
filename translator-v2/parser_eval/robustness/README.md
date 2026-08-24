@@ -8,6 +8,7 @@ Minimal OP2 apps that assess Flang Stage-1 robustness relative to fparser2
 | Category | Intent |
 |----------|--------|
 | `syntax_gap` | Fortran constructs fparser2 cannot parse; Flang should translate |
+| `fparser2_gap` | Valid F2003/F2008 that fparser2 rejects (parser bug, not a newer standard) |
 | `negative_control` | Constructs neither parser handles on this toolchain |
 | `pipeline` | OP2 Flang-path stress (validation, multi-file, macros, funcref, fallback) |
 | `flang_gap` | Regression tests for former Flang-only gaps (Fortran `INCLUDE`) |
