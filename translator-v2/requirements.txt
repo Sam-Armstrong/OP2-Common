@@ -1,5 +1,5 @@
 jinja2
-fparser
+fparser==0.2.4
 pcpp
 sympy
 libclang==18.1.1

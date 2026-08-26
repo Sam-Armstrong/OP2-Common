@@ -306,11 +306,36 @@ def parse_file(i, raw_path, lang, args):
     return lang.parseProgram(Path(raw_path), include_dirs, defines)
 
 
+def _serialize_arg(arg) -> dict:
+    rec = {"kind": type(arg).__name__, "id": getattr(arg, "id", None)}
+    if hasattr(arg, "access_type") and arg.access_type is not None:
+        rec["access"] = arg.access_type.name
+    if hasattr(arg, "opt"):
+        rec["opt"] = bool(arg.opt)
+    if hasattr(arg, "dat_id"):
+        rec["dat_id"] = arg.dat_id
+    if hasattr(arg, "map_id"):
+        rec["map_id"] = arg.map_id
+    if hasattr(arg, "map_idx"):
+        rec["map_idx"] = arg.map_idx
+    if hasattr(arg, "ptr"):
+        rec["ptr"] = str(arg.ptr).lower()
+    if hasattr(arg, "dim"):
+        rec["dim"] = arg.dim
+    if hasattr(arg, "typ") and arg.typ is not None:
+        rec["typ"] = str(arg.typ)
+    if hasattr(arg, "ref"):
+        rec["ref"] = arg.ref
+    return rec
+
+
 def _deps_dump(app: Application) -> dict:
     """
     Build a JSON-serialisable summary of kernel dependency trees.
 
     Avoids dumping full ASTs / Program back-pointers (which form cycles).
+    Also records per-loop argument signatures so parser-eval can check IR
+    equivalence (access modes, maps, dims) without walking generated source.
     """
     functions = []
     by_name = {}
@@ -348,7 +373,26 @@ def _deps_dump(app: Application) -> dict:
             kernel = str(getattr(loop, "kernel", "") or "").lower()
             loops.append(
                 {
+                    "name": str(getattr(loop, "name", "") or "").lower(),
                     "kernel": kernel,
+                    "fallback": bool(getattr(loop, "fallback", False)),
+                    "nargs": len(getattr(loop, "args", []) or []),
+                    "args": [_serialize_arg(a) for a in (getattr(loop, "args", []) or [])],
+                    "dats": [
+                        {
+                            "id": d.id,
+                            "ptr": str(d.ptr).lower(),
+                            "dim": d.dim,
+                            "typ": str(d.typ) if d.typ is not None else None,
+                            "soa": bool(d.soa),
+                        }
+                        for d in (getattr(loop, "dats", []) or [])
+                    ],
+                    "maps": [
+                        {"id": m.id, "ptr": str(m.ptr).lower()}
+                        for m in (getattr(loop, "maps", []) or [])
+                    ],
+                    "consts": sorted(str(c).lower() for c in (getattr(loop, "consts", set()) or set())),
                     "depends": by_name.get(kernel, []),
                     "depends_closure": closure(kernel) if kernel else [],
                     "path": str(program.path),

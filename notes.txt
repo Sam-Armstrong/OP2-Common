@@ -40,23 +40,42 @@ Steps:
 - add LLVM Flang dependency
 
 STATUS
-Stage 1 and Stage 2 are implemented and complete for --parser flang (see
-translator-v2/flang-scan/README.md for details): op2-flang-scan builds a JSON
-description of each subprogram (parameters, dependency names, cooked source
-text for kernel emission, and now also a simplified expression-tree walk of
-its assignments/calls/local-array declarations), and
-op2-translator/fortran/flang_validator.py ports every Stage 2 check
-(read/const-write/increment/slice/runtime-dimension) to walk that JSON
-instead of an fparser2 AST. fparser2 is only used as a fallback: per-file, if
-Flang fails to parse a source file; per-loop, if validation needs a
-dependency that wasn't parsed by Flang; and per-scheme, for kernel
-translation schemes that haven't been ported yet (Fortran/c_seq, cuda,
-c_cuda, c_hip - these still walk an fparser2 AST and print a one-time
-warning). Fortran/seq kernel translation and Fortran main-program translation
-(op_par_loop/op_decl_const call rewriting) are both Flang-native. Verified
-end-to-end on apps/fortran/airfoil (genseq target): with --parser flang, the
-seq build+run path (Stage 1 parse, Stage 2 validation, kernel emission, and
-main-program translation) never invokes fparser2 at all.
+Stage 1, Stage 2 and Stage 3 are implemented and complete for --parser flang
+(see translator-v2/flang-scan/README.md for details): op2-flang-scan builds a
+JSON description of each subprogram - parameters, dependency names, cooked
+source text for kernel emission, a simplified expression-tree walk of its
+assignments/calls/local-array declarations (Stage 2), and now also a fully
+typed declaration list and nested statement tree (Stage 3, see the
+"Declaration serialization" / "Statement-tree serialization" sections of
+op2-flang-scan.cpp). op2-translator/fortran/flang_validator.py ports every
+Stage 2 check (read/const-write/increment/slice/runtime-dimension) to walk
+that JSON instead of an fparser2 AST, and
+op2-translator/fortran/flang_kernels_c.py + flang_kernels.py port Stage 3
+(kernel-to-C++ translation, plus the const-rename/hydra-IO/atomicAdd JSON-tree
+transforms fortran/schemes.py applies beforehand) the same way. fparser2 is
+only used as a fallback: per-file, if Flang fails to parse a source file;
+per-loop, if validation or translation needs a dependency that wasn't parsed
+by Flang. Every kernel translation scheme (Fortran/seq, openmp, cuda, c_seq,
+c_cuda, c_hip) and Fortran main-program translation (op_par_loop/op_decl_const
+call rewriting) are Flang-native when --parser flang is selected and Flang
+successfully parsed the relevant sources. That includes every registered
+Fortran kernel scheme: seq, openmp, cuda, c_seq, c_cuda, and c_hip.
 
-Stage 3 (translating kernels to C++) is not yet ported to the Flang path;
-that's what drives the Fortran/c_seq, cuda, c_cuda, c_hip fallback above.
+Verified end-to-end on apps/fortran/airfoil, jac1 and reduction: with
+--parser flang, translating with -t c_seq/c_cuda/c_hip produces kernel C++
+files byte-identical to the fparser2 path (aside from a content-hash-derived
+prelude macro name in the CUDA/HIP master kernel file, which is expected to
+differ run-to-run regardless of parser backend). Fortran/cuda (FortranCuda)
+is also Flang-native: const rename, hydra IO, EXTERNAL stripping, SoA/gbl
+stride insertion, and Fortran-style atomicAdd rewriting all run on
+flang_source without an fparser2 AST (verified on airfoil with the
+test_no_fparser2_audit harness). Fortran/openmp is likewise Flang-native
+(including the SIMD `rename_entities` + `insert_strides` path). Formatting
+differs from fparser2's pretty printer (Flang cooked source is
+lowercase/compact) but the semantic rewrites match. A full
+airfoil_plain_cuda build still needs a CUDA Fortran compiler (e.g.
+nvfortran; F_HAS_CUDA); this environment only has gfortran.
+
+Parser equivalence suite: translator-v2/parser_eval/
+(airfoil + unstructured tri_diff + mesh_res).
+Run with: bash translator-v2/parser_eval/run_eval.sh

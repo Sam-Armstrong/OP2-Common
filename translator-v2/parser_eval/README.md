@@ -9,7 +9,9 @@ plus a robustness suite of mini-apps that stress Stage 1–3 of the Fortran path
 ```
 parser_eval/
   eval_parsers.py          # example-app evaluation driver
+  eval_equivalence.py      # Flang vs fparser2 artefact + runtime equivalence
   run_eval.sh              # WSL/Linux entry point
+  run_equivalence.sh       # WSL/Linux equivalence entry point
   examples/
     <name>/
       example.json         # required: describes sources, targets, runtime
@@ -18,6 +20,9 @@ parser_eval/
     eval_robustness.py     # robustness driver
     run_robustness.sh
     cases/<name>/case.json
+  equivalence/
+    README.md              # recorded equivalence results (all Fortran backends)
+    results.json
 ```
 
 Current examples (all unstructured-mesh style):
@@ -52,7 +57,18 @@ For each example:
 bash translator-v2/parser_eval/run_eval.sh
 bash translator-v2/parser_eval/run_eval.sh --examples tri_diff mesh_res
 bash translator-v2/parser_eval/run_eval.sh --skip-runtime
+bash translator-v2/parser_eval/run_equivalence.sh
 ```
+
+Full equivalence results (every Fortran backend, 3-run averages, FLOPs / bandwidth / solution fingerprints) are recorded in [`equivalence/README.md`](equivalence/README.md). Headline from **26 August 2026** (mean of 3 `c_cuda` runs after one GPU warmup; wall-clock relative difference vs 2% dissertation bound):
+
+| Application | Codegen fparser2 / Flang (s) | `c_cuda` wall fparser2 / Flang (s) | Rel. wall | Solution fingerprints |
+|-------------|-----------------------------:|-----------------------------------:|----------:|-----------------------|
+| `airfoil` | 10.047±0.110 / 9.789±0.068 | 5.652±0.013 / 5.679±0.024 | 0.48% | RMS-vs-ref identical |
+| `mesh_res` | 9.126±0.067 / 8.922±0.227 | 24.681±0.072 / 24.641±0.063 | 0.17% | `sum(q)=1`, `q_max` identical |
+| `tri_diff` | 9.146±0.039 / 9.131±0.074 | 24.074±0.024 / 24.034±0.078 | 0.17% | `sum(u)=1`, `u_max` identical |
+
+Dependency trees, loop IR, and generated `seq` / `openmp` / `cuda` / `c_cuda` / `c_hip` / `c_seq` file trees match. Fortran `hip` has no scheme. MPI makefile variants reuse those trees.
 
 ## Robustness suite
 
