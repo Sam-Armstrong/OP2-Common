@@ -23,6 +23,11 @@ parser_eval/
   equivalence/
     README.md              # recorded equivalence results (all Fortran backends)
     results.json
+  validation/
+    README.md              # recorded Stage-2 validation-check equivalence
+    eval_validation.py
+    run_validation.sh
+    cases/<name>/case.json
 ```
 
 Current examples (all unstructured-mesh style):
@@ -58,6 +63,7 @@ bash translator-v2/parser_eval/run_eval.sh
 bash translator-v2/parser_eval/run_eval.sh --examples tri_diff mesh_res
 bash translator-v2/parser_eval/run_eval.sh --skip-runtime
 bash translator-v2/parser_eval/run_equivalence.sh
+bash translator-v2/parser_eval/validation/run_validation.sh
 ```
 
 Full equivalence results (every Fortran backend, 3-run averages, FLOPs / bandwidth / solution fingerprints) are recorded in [`equivalence/README.md`](equivalence/README.md). Headline from **26 August 2026** (mean of 3 `c_cuda` runs after one GPU warmup; wall-clock relative difference vs 2% dissertation bound):
@@ -69,6 +75,8 @@ Full equivalence results (every Fortran backend, 3-run averages, FLOPs / bandwid
 | `tri_diff` | 9.146±0.039 / 9.131±0.074 | 24.074±0.024 / 24.034±0.078 | 0.17% | `sum(u)=1`, `u_max` identical |
 
 Dependency trees, loop IR, and generated `seq` / `openmp` / `cuda` / `c_cuda` / `c_hip` / `c_seq` file trees match. Fortran `hip` has no scheme. MPI makefile variants reuse those trees.
+
+Stage-2 validation-check equivalence (kernel resolution, const writes, `OP_READ` / `OP_INC`, slices, …) is recorded in [`validation/README.md`](validation/README.md).
 
 ## Robustness suite
 
