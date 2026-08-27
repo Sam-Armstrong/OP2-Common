@@ -2,7 +2,7 @@
 
 Recorded **27 August 2026** against fparser **0.2.4** and the built `op2-flang-scan`. Mini-apps exercise the Stage-2 checks from the dissertation (kernel resolution, unknown dependencies, parameter/const conflicts, const writes, slice/stride, `OP_READ` / `op_arg_idx` writes, `OP_INC` linearisation, runtime-dimension locals).
 
-Overall: **18/19** cases matched the recorded expectation on both parsers; **18/19** had equivalent fparser2 and Flang outcomes.
+Overall: **19/19** cases matched the recorded expectation on both parsers; **19/19** had equivalent fparser2 and Flang outcomes.
 
 Reproduce with (WSL/Linux):
 
@@ -44,21 +44,11 @@ Equivalence requires the same class, the same warning/error kinds, and (for `OP_
 | `runtime_local` | runtime-dimension locals | `warning` | `warning` | `warning` | runtime local arrays | yes |
 | `slice_dat` | slice/stride | `fallback` | `fallback` | `fallback` | slice/stride | yes |
 | `slice_gbl` | slice/stride | `fallback` | `fallback` | `fallback` | slice/stride | yes |
-| `unknown_dep` | unknown dependencies | `fallback` | `fallback` | `pass` | unknown dependencies / — | **no** |
+| `unknown_dep` | unknown dependencies | `fallback` | `fallback` | `fallback` | unknown dependencies | yes |
 
 ## Disagreements
 
-### `unknown_dep`
-
-Kernel calls a subroutine that is not defined in the application
-
-- fparser2: `fallback` kinds=['unknown dependencies'] inc=— — unknown_dep.F90/17:0: Warning: scale unknown subroutine/function references:
-- Flang: `pass` kinds=— inc=— — Translated program 1 of 1: /tmp/op2_validation_work/unknown_dep/flang/unknown_dep.F90
-- outcome: fparser2=fallback flang=pass
-- kinds: fparser2=['unknown dependencies'] flang=[]
-- flang: wanted fallback, got pass (Translated program 1 of 1: /tmp/op2_validation_work/unknown_dep/flang/unknown_dep.F90)
-- flang: missing kind(s) ['unknown dependencies']; got []
-- notes: fparser2 keeps unknown CALL names in entity.depends. Flang resolve_flang_dependencies drops names that do not resolve to a Function, so this check may not fire on the Flang path.
+None — every case produced the same class and kinds on both parsers.
 
 ## Per-check notes
 
@@ -70,16 +60,20 @@ Kernel calls a subroutine that is not defined in the application
 - **parameter/const conflict** (equivalent): `param_const_conflict`
 - **runtime-dimension locals** (equivalent): `runtime_local`
 - **slice/stride** (equivalent): `slice_dat`, `slice_gbl`
-- **unknown dependencies** (outcome mismatch): `unknown_dep`
+- **unknown dependencies** (equivalent): `unknown_dep`
 
 ## Conclusions
 
-fparser2 and Flang agreed on **18/19** cases. They diverged on `unknown_dep`. Every check that inspects kernel bodies the two parsers both see — kernel resolution (`OpError` for missing, ambiguous, and arity mismatch), const writes, slice/stride incompatibility, `OP_READ` and `op_arg_idx` writes (including via a child subroutine), `OP_INC` linearisation (`no-ref`, `multi-ref`, `no-op`, `index mismatch`, `invalid usage`), parameter/const name clashes, and runtime-dimension locals — produced the same class and message kind. The one gap is unknown callees: fparser2 keeps unresolved `CALL` names on `entity.depends` and sets `loop.fallback`, while Flang's `resolve_flang_dependencies` drops names that do not resolve to a known `Function` before `validateLoop` runs, so the Flang path translates `unknown_dep` as a clean pass. That is a Stage-1 name-resolution difference, not a different check implementation.
+fparser2 and Flang performed the same Stage-2 validation on all 19 cases. Kernel-resolution errors (`OpError`), fallback-inducing checks (const writes, slice/stride, `OP_READ` / `op_arg_idx` writes, `OP_INC` linearisation, unknown callees), and warning-only checks (parameter/const name clashes, runtime-dimension locals) agreed on class and message kind. The Flang path therefore matches the existing fparser2 validator on this suite.
 
 ## Environment notes
 
 - Validation runs with `-t seq -d`; codegen is only needed to observe `Generated loop host … (fallback)` and `store.json` `fallback` flags.
 - Warning-only checks (param/const conflict, runtime-dimension locals) must not set `loop.fallback`.
-- Flang `resolve_flang_dependencies` drops callee names that do not resolve to a known Function before `validateLoop` runs.
+- Flang `resolve_flang_dependencies` keeps unresolved `CALL` names (from `flang_body` calls) and only drops `FunctionReference` names that do not resolve to a known Function.
 - Raw numbers: `translator-v2/parser_eval/validation/results.json`.
 - Cases: `translator-v2/parser_eval/validation/cases/`.
+
+## Unknown-callee fix
+
+`resolve_flang_dependencies` used to drop every name that did not resolve to a known `Function`, including unambiguous `CALL` statements. fparser2 keeps those names: `parseSubprogram` adds every `Call_Stmt` to `entity.depends`, and `validateLoop` then sets `loop.fallback` for unknown callees. The Flang filter now keeps two sets, matching the split the scanner already documents. Names that resolve to a `Function` stay (the `FunctionReference` / array-index disambiguation, equivalent to `parseFunctionDependencies`). Names that appear as `CALL` statements in `flang_body["calls"]` also stay, even when they do not resolve, so `extractDependencies` reports them as unknown on both paths. `FunctionReference` names that are only array indexing or unresolved intrinsics are still dropped, which avoids treating `u(i)` as a missing callee.

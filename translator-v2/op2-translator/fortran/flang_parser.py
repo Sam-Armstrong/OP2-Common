@@ -310,9 +310,10 @@ def build_program_from_flang(path: Path, source: str, data: Dict[str, Any]) -> P
     Build a complete Stage 1 ``Program`` from op2-flang-scan JSON.
 
     Populates loops, consts, and Function entities (each with ``flang_source``,
-    parameters, and raw dependency names). Cross-file dependency filtering is
-    deferred to ``resolve_flang_dependencies`` once every translation unit has
-    been loaded into the ``Application``.
+    parameters, and raw dependency names). Cross-file resolution of known
+    callees (and retention of unknown ``CALL`` names) is deferred to
+    ``resolve_flang_dependencies`` once every translation unit has been loaded
+    into the ``Application``.
     """
     program = Program(path, None, source)
     setattr(program, "stage1_backend", "flang")
@@ -412,15 +413,30 @@ def _merge_flang_entities(program: Program, flang_entities: List[Function]) -> N
             program.entities.append(entity)
 
 
+def _flang_call_names(entity: Function) -> Set[str]:
+    """Lower-cased names of unambiguous ``CALL`` statements in ``flang_body``."""
+    body = getattr(entity, "flang_body", None) or {}
+    names: Set[str] = set()
+    for call in body.get("calls") or []:
+        name = str(call.get("name") or "").lower()
+        if name:
+            names.add(name)
+    return names
+
+
 def resolve_flang_dependencies(app: Application) -> None:
     """
-    Filter each entity's ``depends`` set to names that refer to known subprograms
-    in the application.
+    Resolve each entity's ``depends`` set against the application.
 
-    This is the Flang equivalent of ``fortran.parser.parseFunctionDependencies``:
-    the C++ scanner records every callee / function-reference name (including
-    intrinsics and parameter names); we keep only edges that resolve to a
-    ``Function`` entity somewhere in the app.
+    The scanner records a superset: ``CallStmt`` names (always real calls) and
+    ``FunctionReference`` names (real calls or array indexing; Flang cannot
+    tell them apart without a symbol table). Matching fparser2:
+
+    * ``CallStmt`` names stay even if they do not resolve. fparser2's
+      ``parseSubprogram`` adds every ``Call_Stmt`` to ``depends``, and
+      ``validateLoop`` then sets ``loop.fallback`` for unknown callees.
+    * ``FunctionReference`` names stay only if they resolve to a ``Function``,
+      which is the Flang equivalent of ``parseFunctionDependencies``.
     """
     known_names: Set[str] = set()
     for program in app.programs:
@@ -432,10 +448,12 @@ def resolve_flang_dependencies(app: Application) -> None:
         for entity in program.entities:
             if not isinstance(entity, Function):
                 continue
+            call_names = _flang_call_names(entity)
             entity.depends = {
                 dep.lower()
                 for dep in entity.depends
-                if dep.lower() in known_names and dep.lower() != entity.name.lower()
+                if dep.lower() != entity.name.lower()
+                and (dep.lower() in known_names or dep.lower() in call_names)
             }
 
 
