@@ -4,6 +4,9 @@
 #include "flang/Parser/provenance.h"
 #include "flang/Parser/source.h"
 #include "flang/Parser/message.h"
+#if __has_include("flang/Support/LangOptions.h")
+#include "flang/Support/LangOptions.h"
+#endif
 
 #include "llvm/Support/raw_ostream.h"
 
@@ -3051,7 +3054,12 @@ static int scanOneUnit(const std::string &reportedPath,
 
     const auto tParse0 = Clock::now();
     parsing.Prescan(path, options);
+#if __has_include("flang/Support/LangOptions.h")
+    Fortran::common::LangOptions langOptions;
+    parsing.Parse(llvm::errs(), langOptions);
+#else
     parsing.Parse(llvm::errs());
+#endif
     const double parseMs = msSince(tParse0);
 
     auto emitError = [&](const std::string &msg) {

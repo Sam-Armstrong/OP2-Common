@@ -15,13 +15,11 @@ export CUDA_INSTALL_PATH="/usr/local/cuda"
 
 # Stage 1 parser selection for the OP2 Fortran translator.
 #   - fparser2 (default): pure-Python fparser2 walker, no extra dependencies.
-#   - flang:              LLVM Flang parser via translator-v2/flang-scan. Build
-#                         the helper binary first (see flang-scan/README.md)
-#                         and optionally set OP2_FLANG_SCAN to its location.
+#   - flang:              LLVM Flang parser via op2-flang-scan. Build the helper
+#                         with `make -C op2` after LLVM Flang is configured
+#                         (see docs/getting_started.rst), or set OP2_FLANG_SCAN.
 # This flag is forwarded to op2-translator through makefiles/f_app.mk.
-# Uncomment the next line to switch this example over to Flang:
-export OP2_EXTRA_TRANSLATOR_FLAGS="--parser flang"
-export OP2_FLANG_SCAN="${ROOT_DIR:-${PWD}}/translator-v2/flang-scan/build/op2-flang-scan"
+export OP2_FORTRAN_PARSER="flang"
 
 for cmd in gcc g++ gfortran; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then

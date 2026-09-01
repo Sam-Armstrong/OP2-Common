@@ -33,16 +33,31 @@ from store import Application, Function, Location, ParseError, Program
 DEFAULT_BIN_NAME = "op2-flang-scan"
 
 
-def _repo_build_candidate() -> Optional[Path]:
+def _repo_build_candidates() -> List[Path]:
     """
-    Return the default build location of op2-flang-scan relative to this file.
+    Default locations of op2-flang-scan relative to this file.
+
+    The library build (`make -C op2`) installs the binary into ``op2/bin``.
+    A standalone CMake build still lands in ``translator-v2/flang-scan/build``.
     """
-    # fortran/flang_parser.py -> op2-translator/fortran/flang_parser.py
-    # walk up to translator-v2/flang-scan/build/op2-flang-scan
+    # fortran/flang_parser.py -> translator-v2/op2-translator/fortran/
     here = Path(__file__).resolve()
     translator_v2 = here.parents[2]
-    candidate = translator_v2 / "flang-scan" / "build" / DEFAULT_BIN_NAME
-    return candidate if candidate.is_file() else None
+    repo_root = translator_v2.parent
+    return [
+        repo_root / "op2" / "bin" / DEFAULT_BIN_NAME,
+        translator_v2 / "flang-scan" / "build" / DEFAULT_BIN_NAME,
+    ]
+
+
+def _repo_build_candidate() -> Optional[Path]:
+    """
+    Return the first existing default build location of op2-flang-scan.
+    """
+    for candidate in _repo_build_candidates():
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def resolve_scan_binary(override: Optional[str] = None) -> Path:
@@ -52,8 +67,9 @@ def resolve_scan_binary(override: Optional[str] = None) -> Path:
     Lookup order:
       1. explicit override (CLI flag)
       2. OP2_FLANG_SCAN environment variable
-      3. translator-v2/flang-scan/build/op2-flang-scan
-      4. op2-flang-scan on PATH
+      3. op2/bin/op2-flang-scan (library build install)
+      4. translator-v2/flang-scan/build/op2-flang-scan
+      5. op2-flang-scan on PATH
     """
     if override:
         p = Path(override)
@@ -77,8 +93,9 @@ def resolve_scan_binary(override: Optional[str] = None) -> Path:
         return Path(found)
 
     raise ParseError(
-        "op2-flang-scan binary not found. Build it from translator-v2/flang-scan "
-        "or set OP2_FLANG_SCAN / pass --flang-scan <path>."
+        "op2-flang-scan binary not found. Build it with `make -C op2` when LLVM "
+        "Flang is configured, or from translator-v2/flang-scan, or set "
+        "OP2_FLANG_SCAN / pass --flang-scan <path>."
     )
 
 

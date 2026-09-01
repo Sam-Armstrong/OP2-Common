@@ -5,6 +5,23 @@ TRANSLATOR ?= $(ROOT_DIR)/translator-v2/op2-translator.sh -v
 # driver script without editing app Makefiles.
 OP2_EXTRA_TRANSLATOR_FLAGS ?=
 
+# Fortran Stage-1 parser: fparser2 (default) or flang (LLVM Flang via
+# op2-flang-scan). Setting OP2_FORTRAN_PARSER=flang appends --parser flang.
+OP2_FORTRAN_PARSER ?= fparser2
+
+ifneq ($(filter $(OP2_FORTRAN_PARSER),fparser2 flang),$(OP2_FORTRAN_PARSER))
+  $(error OP2_FORTRAN_PARSER must be "fparser2" or "flang" (got "$(OP2_FORTRAN_PARSER)"))
+endif
+
+ifeq ($(OP2_FORTRAN_PARSER),flang)
+  OP2_EXTRA_TRANSLATOR_FLAGS += --parser flang
+  ifeq ($(OP2_FLANG_SCAN),)
+    ifneq ($(wildcard $(OP2_BUILD_DIR)/bin/op2-flang-scan),)
+      export OP2_FLANG_SCAN := $(OP2_BUILD_DIR)/bin/op2-flang-scan
+    endif
+  endif
+endif
+
 # Root directory for per-variant Fortran module output (-J). Override (e.g. under
 # /tmp) when building on WSL DrvFS (/mnt/c/...), where gfortran can fail writing .mod.
 F_APP_MOD_DIR ?= mod

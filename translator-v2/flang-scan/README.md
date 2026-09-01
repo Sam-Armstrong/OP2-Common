@@ -12,62 +12,71 @@ this binary and consumes the JSON when the translator is run with
 
 ## Installing LLVM Flang
 
-You need a build of LLVM/Flang that exposes the Flang parser libraries and
-their CMake config files. A few options, in rough order of convenience:
+`op2-flang-scan` tracks Flang's parse-tree API (tuple-class nodes such
+as `CallStmt::t` and `ArrayElement::Subscripts()`). That layout first
+shipped in **LLVM 23**, so the scanner needs **LLVM Flang >= 23**
+(parser headers, `libFortranParser`, and LLVM CMake config). LLVM 18--22
+will not compile it.
 
-### 1. Distro packages (easiest on Linux)
+See `docs/getting_started.rst` for the full install recipe. In short:
 
-On Debian / Ubuntu 24.04+:
+### 1. Distro packages (LLVM >= 23)
 
-```bash
-sudo apt-get install flang-new libflang-dev llvm-dev mlir-tools libmlir-dev
-```
-
-Package names change frequently across LLVM versions; `apt search flang` will
-show what is available. You want the `-dev` packages so that headers and CMake
-files are present in `/usr/lib/llvm-<ver>/lib/cmake/`.
-
-On Fedora:
+Ubuntu 24.04 archive packages (`libflang-18-dev` ... `libflang-20-dev`)
+are too old. Use [apt.llvm.org](https://apt.llvm.org/) instead:
 
 ```bash
-sudo dnf install flang-devel llvm-devel mlir-devel
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 23
+sudo apt-get install -y libflang-23-dev llvm-23-dev
+export LLVM_INSTALL_PATH=/usr/lib/llvm-23
 ```
 
 ### 2. Homebrew (macOS)
 
+Fine if `llvm-config --version` is **>= 23**:
+
 ```bash
 brew install llvm
+export LLVM_INSTALL_PATH="$(brew --prefix llvm)"
 ```
 
-Flang headers land in `$(brew --prefix llvm)/include/flang/...` and the CMake
-config files are under `$(brew --prefix llvm)/lib/cmake/`.
+### 3. Build from source
 
-### 3. Build from source (any OS, required if distro packages are too old)
+Use this if a >= 23 package is not available, or to track LLVM `main`.
+See `docs/getting_started.rst` for the CMake flags.
 
 ```bash
 git clone --depth 1 https://github.com/llvm/llvm-project.git
 cd llvm-project
 cmake -S llvm -B build -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DLLVM_ENABLE_PROJECTS="clang;mlir;flang" \
+    -DLLVM_ENABLE_PROJECTS="mlir;flang" \
     -DLLVM_TARGETS_TO_BUILD=host \
-    -DCMAKE_INSTALL_PREFIX=$HOME/.local/llvm
+    -DCMAKE_INSTALL_PREFIX=$HOME/.local/llvm \
+    -DLLVM_ENABLE_RTTI=ON
 cmake --build build --target install
 ```
 
 You only need the parser libraries (`FortranParser`, `FortranCommon`,
 `FortranSupport`) and their headers at runtime; a full Flang build still takes
-a while, so grab a coffee.
+a while.
 
 ### 4. Windows
 
-On Windows the path of least resistance is WSL + one of the options above.
-Native Windows builds of Flang exist but are not routinely tested against this
-tool.
+On Windows the path of least resistance is WSL + apt.llvm.org 23 (or
+the from-source recipe). Native Windows builds of Flang exist but are
+not routinely tested against this tool.
 
 ## Building op2-flang-scan
 
-Once LLVM/Flang is installed, point CMake at the install prefix and build:
+The OP2 library build will compile this tool when LLVM Flang is detected
+(`make -C op2 config` prints `LLVM Flang FOUND`, then `make -C op2` or
+`make -C op2 flang-scan`). See `docs/getting_started.rst` for installing LLVM
+Flang, `LLVM_INSTALL_PATH`, and `OP2_FORTRAN_PARSER`.
+
+To configure the scanner by hand, point CMake at the LLVM install prefix:
 
 ```bash
 cd translator-v2/flang-scan
@@ -80,7 +89,7 @@ cmake --build build
 The binary lands at `translator-v2/flang-scan/build/op2-flang-scan`.
 
 If your distro installed Flang under a versioned prefix (e.g.
-`/usr/lib/llvm-20`), pass that as `-DCMAKE_PREFIX_PATH=/usr/lib/llvm-20`.
+`/usr/lib/llvm-23`), pass that as `-DCMAKE_PREFIX_PATH=/usr/lib/llvm-23`.
 
 ### Troubleshooting
 
@@ -93,9 +102,16 @@ If your distro installed Flang under a versioned prefix (e.g.
 - **"Flang parser headers not found at .../flang/Parser"** — LLVM was built
   without Flang. Rebuild with
   `-DLLVM_ENABLE_PROJECTS="mlir;flang"` and reinstall.
+- **`#error host endianness is not known`** — Flang's `uint128.h` needs
+  `FLANG_LITTLE_ENDIAN` or `FLANG_BIG_ENDIAN`. The CMakeLists.txt now defines
+  this from `CMAKE_CXX_BYTE_ORDER`; re-run `cmake -B build`.
 - **`LLVMSupport` / `FortranParser` undefined references** — your LLVM was
   not installed (only built). Re-run `cmake --build build --target install`
   in the `llvm-project` tree.
+- **`zstd::libzstd_shared` was not found** — distro LLVM packages often
+  require zstd at CMake generate time. Install `libzstd-dev` (Debian/Ubuntu)
+  or `libzstd-devel` (Fedora), or rely on the CMakeLists.txt workaround that
+  locates `libzstd.so.1` on the system library path.
 
 ## Running the translator against Flang
 
@@ -103,10 +119,13 @@ The Python driver looks for the scan binary in this order:
 
 1. `--flang-scan <path>` command-line flag
 2. `OP2_FLANG_SCAN` environment variable
-3. `translator-v2/flang-scan/build/op2-flang-scan`
-4. `op2-flang-scan` on `PATH`
+3. `op2/bin/op2-flang-scan` (installed by `make -C op2`)
+4. `translator-v2/flang-scan/build/op2-flang-scan`
+5. `op2-flang-scan` on `PATH`
 
-To switch from `fparser2` (default) to Flang for Stage 1:
+To switch from `fparser2` (default) to Flang for Stage 1, either set
+`OP2_FORTRAN_PARSER=flang` when using the OP2 app Makefiles, or pass the flag
+directly:
 
 ```bash
 python3 translator-v2/op2-translator --parser flang airfoil.F90 -o generated/
