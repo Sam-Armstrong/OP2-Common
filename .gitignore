@@ -17,14 +17,3 @@
 *.swp
 
 translator-v2/flang-scan/build
-translator-v2/parser_eval/out
-translator-v2/parser_eval/examples/*/generated
-translator-v2/parser_eval/examples/*/mod
-# built app binaries (make targets: <app>_<variant>)
-translator-v2/parser_eval/examples/*/*_seq
-translator-v2/parser_eval/examples/*/*_genseq
-translator-v2/parser_eval/examples/*/*_openmp
-translator-v2/parser_eval/examples/*/*_cuda
-translator-v2/parser_eval/examples/*/*_c_cuda
-translator-v2/parser_eval/examples/*/*_c_hip
-translator-v2/parser_eval/examples/*/*_mpi_*
