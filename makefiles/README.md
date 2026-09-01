@@ -7,7 +7,7 @@ This is included at the start of both the primary OP2 makefile in `op2/Makefile`
  * `OP2_COMPILER`: Equivalent to `OP2_C_COMPILER=X OP2_F_COMPILER=X OP2_C_CUDA_COMPILER=nvhpc`.
  * `OP2_PROFILE`: A potential alternative (although not necessarily) to specifiying `OP2_COMPILER` or the `OP2_{C, C_CUDA, F}_COMPILER` variables, this specifies the basename of the profile under `profiles/` that is included to help setup compilation in a particular build environment. More information [below](#profiles-profiles).
  * (optional) `OP2_BUILD_DIR`: The directory under which OP2's `lib/` `mod/` and `obj/` folders and contents will be built. This defaults to `OP2-Common/op2` which should be acceptable for most cases.
- * (optional) `LLVM_INSTALL_PATH` (alias `FLANG_INSTALL_PATH`): Prefix of an LLVM install that includes the Flang parser headers and libraries. Used at `make config` time to decide whether `op2-flang-scan` can be built. Typical values are `$HOME/.local/llvm` or `/usr/lib/llvm-18`.
+ * (optional) `LLVM_INSTALL_PATH` (alias `FLANG_INSTALL_PATH`): Prefix of an LLVM install that includes the Flang parser headers and libraries. Used at `make config` time to decide whether `op2-flang-scan` can be built. Typical values are `$HOME/.local/llvm` or `/usr/lib/llvm-23`.
  * (optional) `OP2_FORTRAN_PARSER`: Fortran Stage-1 parser used by `f_app.mk`. `fparser2` (default) or `flang`.
  * (optional) `OP2_FLANG_SCAN`: Path to the `op2-flang-scan` binary. Set automatically to `$(OP2_BUILD_DIR)/bin/op2-flang-scan` when `OP2_FORTRAN_PARSER=flang` and that file exists.
  * (optional) `OP2_EXTRA_TRANSLATOR_FLAGS`: Extra flags forwarded to every translator invocation (e.g. `--parser flang`).

@@ -361,12 +361,6 @@ Example — generate and run sequential Airfoil with Flang:
 
 If Flang fails to parse a file, that file falls back to fparser2 automatically.
 
-.. note::
-   On WSL, if the repository lives under ``/mnt/c``, gfortran module writes and
-   translator output can fail on DrvFS. Set ``F_APP_GENERATED_DIR`` and
-   ``F_APP_MOD_DIR`` to directories on the Linux filesystem (for example under
-   ``/tmp``) before building Fortran apps.
-
 Spack
 -----
 

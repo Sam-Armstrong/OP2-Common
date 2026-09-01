@@ -105,19 +105,6 @@ bookleaf=0
 ##########################################################################
 
 def comment_remover(text):
-  """
-  Strip C/C++-style comments from source text while preserving string literals.
-
-  Removes both single-line (``//``) and multi-line (``/* */``) comments. Quoted
-  strings (single and double) are left intact so that comment-like sequences
-  inside literals are not removed.
-
-  Args:
-      text: The source code string to process.
-
-  Returns:
-      The source text with all comments removed.
-  """
 
   def replacer(match):
       s = match.group(0)
@@ -137,18 +124,6 @@ def comment_remover(text):
 ##########################################################################
 
 def op_parse_calls(text):
-  """
-  Count occurrences of key OP2 API calls in the source text.
-
-  Searches for ``op_init``, ``op_exit``, ``op_partition``, and ``hdf5``
-  call patterns after stripping comments from the text.
-
-  Args:
-      text: The Fortran source code string to scan.
-
-  Returns:
-      A tuple of four integers: (inits, exits, partitions, hdf5_calls).
-  """
 
   # remove comments just for this call
   text = comment_remover(text)
@@ -166,25 +141,6 @@ def op_parse_calls(text):
 ##########################################################################
 
 def op_decl_const_parse(text):
-  """
-  Parse all ``op_decl_const`` calls from Fortran source text.
-
-  Extracts constant declarations by matching the ``call op_decl_const(...)``
-  pattern and splitting the three required arguments (name, dimension/type,
-  and secondary name).
-
-  Args:
-      text: The Fortran source code string to scan.
-
-  Returns:
-      A list of dicts, one per constant declaration, each containing:
-          - ``loc``: Character index of the match in the source text.
-          - ``dim``: The dimension argument (second positional arg).
-          - ``type``: The type argument (same as dim in current implementation).
-          - ``name``: The constant name (first positional arg).
-          - ``name2``: The secondary name (third positional arg).
-      Returns None if a declaration has an incorrect number of arguments.
-  """
 
     consts = []
     for m in re.finditer('call(.+)op_decl_const(.*)\((.*)\)', text):
@@ -209,19 +165,6 @@ def op_decl_const_parse(text):
 # parsing for arguments in op_par_loop to find the correct closing brace
 ##########################################################################
 def arg_parse(text,j):
-    """
-    Find the index of the matching closing parenthesis starting from position j.
-
-    Walks forward through the text tracking parenthesis depth until the
-    outermost opening parenthesis is balanced by its closing counterpart.
-
-    Args:
-        text: The source text to scan.
-        j: The starting character index from which to search.
-
-    Returns:
-        The index of the matching closing parenthesis.
-    """
 
     depth = 0
     loc2 = j;
@@ -265,20 +208,6 @@ def arg_parse2(text, j):
         loc2 = loc2 + 1
 
 def typechange(text):
-  """
-  Convert verbose Fortran type strings to their short-form equivalents.
-
-  Maps full ``INTEGER(kind=4)`` and ``REAL(kind=8/4)`` type strings (with
-  optional ``:soa`` suffix) to their abbreviated forms (``i4``, ``r8``,
-  ``r4``). If no known type is matched, the original text is returned
-  unchanged.
-
-  Args:
-      text: A quoted type string, e.g. ``'"REAL(kind=8)"'``.
-
-  Returns:
-      The abbreviated type string, or the original text if no match is found.
-  """
   if '"INTEGER(kind=4)"' in text:
     return '"i4"'
   elif '"INTEGER(kind=4):soa"' in text:
@@ -297,22 +226,6 @@ def typechange(text):
 
 
 def get_arg_dat(arg_string, j):
-  """
-  Parse a single ``op_arg_dat`` call from an argument string.
-
-  Extracts the six required arguments (dat, idx, map, dim, typ, acc) from
-  an ``op_arg_dat(...)`` invocation and returns them as a dict. Short-form
-  type abbreviations (``r8``, ``i4``) are expanded to their full Fortran
-  type strings.
-
-  Args:
-      arg_string: The full argument string of the enclosing ``op_par_loop``.
-      j: The character index where ``op_arg_dat`` begins in arg_string.
-
-  Returns:
-      A dict with keys ``type``, ``dat``, ``idx``, ``map``, ``dim``, ``typ``,
-      ``acc``, and ``opt`` (empty string). Returns None on parse error.
-  """
   loc = arg_parse(arg_string,j+1)
   dat_args_string = arg_string[arg_string.find('(',j):loc+1]
 
@@ -364,22 +277,6 @@ def get_arg_dat(arg_string, j):
   return temp_dat
 
 def get_opt_arg_dat(arg_string, j):
-  """
-  Parse a single ``op_opt_arg_dat`` call from an argument string.
-
-  Extracts the seven required arguments (opt, dat, idx, map, dim, typ, acc)
-  from an ``op_opt_arg_dat(...)`` invocation and returns them as a dict.
-  Short-form type abbreviations (``r8``, ``i4``) are expanded to their full
-  Fortran type strings.
-
-  Args:
-      arg_string: The full argument string of the enclosing ``op_par_loop``.
-      j: The character index where ``op_opt_arg_dat`` begins in arg_string.
-
-  Returns:
-      A dict with keys ``type``, ``opt``, ``dat``, ``idx``, ``map``, ``dim``,
-      ``typ``, and ``acc``. Returns None on parse error.
-  """
   loc = arg_parse(arg_string,j+1)
   dat_args_string = arg_string[arg_string.find('(',j):loc+1]
 
@@ -432,22 +329,6 @@ def get_opt_arg_dat(arg_string, j):
   return temp_dat
 
 def get_arg_gbl(arg_string, k):
-  """
-  Parse a single ``op_arg_gbl`` call from an argument string.
-
-  Extracts the four required arguments (data, dim, typ, acc) from an
-  ``op_arg_gbl(...)`` invocation and returns them as a dict. Short-form
-  type abbreviations (``r8``, ``i4``) are expanded to their full Fortran
-  type strings.
-
-  Args:
-      arg_string: The full argument string of the enclosing ``op_par_loop``.
-      k: The character index where ``op_arg_gbl`` begins in arg_string.
-
-  Returns:
-      A dict with keys ``type``, ``data``, ``dim``, ``typ``, ``acc``, and
-      ``opt`` (empty string). Returns None on parse error.
-  """
   loc = arg_parse(arg_string,k+1)
   gbl_args_string = arg_string[arg_string.find('(',k)+1:loc]
 
@@ -495,22 +376,6 @@ def get_arg_gbl(arg_string, k):
   return temp_gbl
 
 def get_opt_arg_gbl(arg_string, k):
-  """
-  Parse a single ``op_opt_arg_gbl`` call from an argument string.
-
-  Extracts the five required arguments (opt, data, dim, typ, acc) from an
-  ``op_opt_arg_gbl(...)`` invocation and returns them as a dict. Short-form
-  type abbreviations (``r8``, ``i4``) are expanded to their full Fortran
-  type strings.
-
-  Args:
-      arg_string: The full argument string of the enclosing ``op_par_loop``.
-      k: The character index where ``op_opt_arg_gbl`` begins in arg_string.
-
-  Returns:
-      A dict with keys ``type``, ``opt``, ``data``, ``dim``, ``typ``, and
-      ``acc``. Returns None on parse error.
-  """
   loc = arg_parse(arg_string,k+1)
   gbl_args_string = arg_string[arg_string.find('(',k)+1:loc]
 
@@ -566,25 +431,6 @@ def append_init_soa(text):
 ##########################################################################
 
 def op_par_loop_parse(text):
-    """
-    Parse all op_par_loop calls from Fortran source text.
-
-    Scans the source text for every occurrence of ``op_par_loop`` and extracts
-    the kernel name, iteration set, and all argument descriptors
-    (``op_arg_dat``, ``op_arg_gbl``, ``op_opt_arg_dat``, ``op_opt_arg_gbl``)
-    from each call site.
-
-    Args:
-        text: The full Fortran source code as a string.
-
-    Returns:
-        A list of dicts, one per ``op_par_loop`` call, each containing:
-            - ``loc``: Character index of the call in the source text.
-            - ``name1``: The kernel subroutine name (first argument).
-            - ``set``: The iteration set (second argument).
-            - ``args``: A list of parsed argument descriptors (dat/gbl structs).
-            - ``nargs``: The number of parsed arguments.
-    """
     loop_args = []
 
     search = "op_par_loop"

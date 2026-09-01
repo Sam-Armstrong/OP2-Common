@@ -22,18 +22,6 @@ from util import getVersion, safeFind
 
 
 def main(argv=None) -> None:
-    """
-    Entry point for the OP2 source-to-source translator.
-
-    Orchestrates the full translation pipeline: argument parsing, source file
-    parsing, validation, code generation for each target, and program
-    translation output. Supports C++ and Fortran OP2 applications and can
-    generate code for multiple backend targets (e.g. sequential, CUDA, OpenMP).
-
-    Args:
-        argv: Optional list of command-line arguments. If None, defaults to
-            sys.argv as per ArgumentParser behaviour.
-    """
     # Build arg parser
     parser = ArgumentParser(prog="op2-translator")
 
@@ -172,22 +160,6 @@ def main(argv=None) -> None:
 
 
 def write_file(path: Path, text: str, args: Namespace) -> None:
-    """
-    Write generated source text to a file, with safety checks.
-
-    Prevents accidental overwriting of input files by comparing the output
-    path against all input file paths. Also skips writing if the file already
-    exists and its content is identical to the new text, avoiding unnecessary
-    filesystem writes and preserving timestamps.
-
-    Args:
-        path: Destination file path to write to.
-        text: The generated source code content.
-        args: Parsed command-line arguments, used to check input file paths.
-
-    Raises:
-        SystemExit: If writing would overwrite an input file.
-    """
     if path.exists():
         for input_path in args.file_paths:
             if not path.samefile(input_path):
@@ -209,27 +181,6 @@ def write_file(path: Path, text: str, args: Namespace) -> None:
 
 
 def parse(args: Namespace, lang: Lang) -> Application:
-    """
-    Parse all input source files into an Application representation.
-
-    Parses each input file using the appropriate language parser. When the
-    language's AST is serializable (e.g. Fortran via fparser), parsing is
-    parallelised across a multiprocessing pool. Otherwise, files are parsed
-    sequentially.
-
-    Args:
-        args: Parsed command-line arguments containing file paths, include
-            directories, and preprocessor defines.
-        lang: The detected source language handler.
-
-    Returns:
-        An Application instance populated with parsed Program objects.
-
-    Raises:
-        SystemExit: If a Fortran syntax error is encountered during parallel
-            parsing.
-        ParseError: Propagated to the caller if an OP2 API parse error occurs.
-    """
     f_args = [(i, raw_path, lang, args) for i, raw_path in enumerate(args.file_paths, 1)]
 
     print(f"Parsing files:")
@@ -282,180 +233,32 @@ def parse(args: Namespace, lang: Lang) -> Application:
 
 
 def parse_file(i, raw_path, lang, args):
-    """
-    Parse a single source file into a Program representation.
-
-    Worker function used by both sequential and multiprocessing-based parsing.
-    Extracts include directories and preprocessor defines from the arguments
-    and delegates to the language-specific parser.
-
-    Args:
-        i: 1-based index of the file being parsed (used for progress display
-            in the caller).
-        raw_path: File path string of the source file to parse.
-        lang: The language handler providing the parseProgram method.
-        args: Parsed command-line arguments containing include directories (-I)
-            and preprocessor defines (-D).
-
-    Returns:
-        A Program object representing the parsed source file.
-    """
     include_dirs = set([Path(dir) for [dir] in args.I])
     defines = [define for [define] in args.D]
 
     return lang.parseProgram(Path(raw_path), include_dirs, defines)
 
 
-def _serialize_arg(arg) -> dict:
-    rec = {"kind": type(arg).__name__, "id": getattr(arg, "id", None)}
-    if hasattr(arg, "access_type") and arg.access_type is not None:
-        rec["access"] = arg.access_type.name
-    if hasattr(arg, "opt"):
-        rec["opt"] = bool(arg.opt)
-    if hasattr(arg, "dat_id"):
-        rec["dat_id"] = arg.dat_id
-    if hasattr(arg, "map_id"):
-        rec["map_id"] = arg.map_id
-    if hasattr(arg, "map_idx"):
-        rec["map_idx"] = arg.map_idx
-    if hasattr(arg, "ptr"):
-        rec["ptr"] = str(arg.ptr).lower()
-    if hasattr(arg, "dim"):
-        rec["dim"] = arg.dim
-    if hasattr(arg, "typ") and arg.typ is not None:
-        rec["typ"] = str(arg.typ)
-    if hasattr(arg, "ref"):
-        rec["ref"] = arg.ref
-    return rec
-
-
-def _deps_dump(app: Application) -> dict:
-    """
-    Build a JSON-serialisable summary of kernel dependency trees.
-
-    Avoids dumping full ASTs / Program back-pointers (which form cycles).
-    Also records per-loop argument signatures so parser-eval can check IR
-    equivalence (access modes, maps, dims) without walking generated source.
-    """
-    functions = []
-    by_name = {}
-    for program in app.programs:
-        for entity in program.entities:
-            if not hasattr(entity, "depends"):
-                continue
-            name = str(entity.name).lower()
-            deps = sorted({str(d).lower() for d in (entity.depends or set())})
-            entry = {
-                "name": name,
-                "scope": list(getattr(entity, "scope", []) or []),
-                "depends": deps,
-                "path": str(program.path),
-            }
-            functions.append(entry)
-            by_name.setdefault(name, deps)
-
-    def closure(root: str) -> list:
-        seen = set()
-        stack = [root.lower()]
-        while stack:
-            cur = stack.pop()
-            if cur in seen:
-                continue
-            seen.add(cur)
-            for d in by_name.get(cur, []):
-                if d not in seen:
-                    stack.append(d)
-        return sorted(x for x in seen if x != root.lower())
-
-    loops = []
-    for program in app.programs:
-        for loop in program.loops:
-            kernel = str(getattr(loop, "kernel", "") or "").lower()
-            loops.append(
-                {
-                    "name": str(getattr(loop, "name", "") or "").lower(),
-                    "kernel": kernel,
-                    "fallback": bool(getattr(loop, "fallback", False)),
-                    "nargs": len(getattr(loop, "args", []) or []),
-                    "args": [_serialize_arg(a) for a in (getattr(loop, "args", []) or [])],
-                    "dats": [
-                        {
-                            "id": d.id,
-                            "ptr": str(d.ptr).lower(),
-                            "dim": d.dim,
-                            "typ": str(d.typ) if d.typ is not None else None,
-                            "soa": bool(d.soa),
-                        }
-                        for d in (getattr(loop, "dats", []) or [])
-                    ],
-                    "maps": [
-                        {"id": m.id, "ptr": str(m.ptr).lower()}
-                        for m in (getattr(loop, "maps", []) or [])
-                    ],
-                    "consts": sorted(str(c).lower() for c in (getattr(loop, "consts", set()) or set())),
-                    "depends": by_name.get(kernel, []),
-                    "depends_closure": closure(kernel) if kernel else [],
-                    "path": str(program.path),
-                }
-            )
-
-    return {"functions": functions, "loops": loops}
-
-
 def validate(args: Namespace, lang: Lang, app: Application) -> None:
-    """
-    Run semantic validation on the parsed application and optionally dump the store.
-
-    Performs language-specific semantic checks on the parsed OP2 application
-    (e.g. verifying dat dimensions, map arities, and argument consistency).
-    If the --dump flag is set, serialises the application state to a JSON file
-    for debugging and inspection.
-
-    Args:
-        args: Parsed command-line arguments, including the dump flag and output
-            directory.
-        lang: The language handler used for validation rules.
-        app: The parsed Application to validate.
-
-    Raises:
-        OpError: Propagated to the caller if a semantic validation error is
-            detected.
-    """
     # Language-specific validate() implementations are responsible for any
     # lazy fparser2 fallback they need (e.g. Fortran's Flang Stage 1 only
     # attaches an fparser2 AST for loops it can't validate directly from
     # Flang's own data).
     app.validate(lang)
 
-    # Create a JSON dump (deps-focused; full __dict__ dump hits circular refs
-    # via Program <-> Entity.program back-pointers).
+    # Create a JSON dump
     if args.dump:
         store_path = Path(args.out, "store.json")
-        dump = _deps_dump(app)
+        serializer = lambda o: getattr(o, "__dict__", "unserializable")
+
+        # Write application dump
         with open(store_path, "w") as file:
-            file.write(json.dumps(dump, indent=4, default=str))
+            file.write(json.dumps(app, default=serializer, indent=4))
 
         print("Dumped store:", store_path, end="\n\n")
 
 
 def codegen(args: Namespace, scheme: Scheme, app: Application, force_soa: bool) -> None:
-    """
-    Generate backend-specific loop host kernels, constants, and master kernel files.
-
-    Iterates over all OP2 parallel loops in the application and generates
-    target-specific kernel source files using the provided translation scheme.
-    Also generates a constants module and a master kernel file if the scheme
-    requires them. Loops that cannot be fully translated for the target fall
-    back to a sequential implementation.
-
-    Args:
-        args: Parsed command-line arguments, including output directory, include
-            directories, preprocessor defines, and target configuration.
-        scheme: The translation scheme pairing a language with a backend target,
-            providing Jinja templates and generation methods.
-        app: The parsed and validated Application containing all loops and data.
-        force_soa: If True, force Struct-of-Arrays data layout for all dats.
-    """
     # Collect the paths of the generated files
     include_dirs = set([Path(dir) for [dir] in args.I])
     defines = [define for [define] in args.D]
@@ -529,20 +332,6 @@ def codegen(args: Namespace, scheme: Scheme, app: Application, force_soa: bool) 
 
 
 def isDirPath(path):
-    """
-    Validate that a path refers to an existing directory.
-
-    Used as an argparse type validator for directory arguments such as -o and -I.
-
-    Args:
-        path: The path string to validate.
-
-    Returns:
-        The path string unchanged if it is a valid directory.
-
-    Raises:
-        ArgumentTypeError: If the path does not point to an existing directory.
-    """
     if os.path.isdir(path):
         return path
     else:
@@ -550,20 +339,6 @@ def isDirPath(path):
 
 
 def isFilePath(path):
-    """
-    Validate that a path refers to an existing file.
-
-    Used as an argparse type validator for the positional file_paths argument.
-
-    Args:
-        path: The path string to validate.
-
-    Returns:
-        The path string unchanged if it is a valid file.
-
-    Raises:
-        ArgumentTypeError: If the path does not point to an existing file.
-    """
     if os.path.isfile(path):
         return path
     else:

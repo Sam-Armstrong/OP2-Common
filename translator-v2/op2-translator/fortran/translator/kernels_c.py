@@ -1309,7 +1309,6 @@ TRANSLATE_TABLE = {
     f2003.Part_Ref: translatePartRef,
 
     f2003.Intrinsic_Function_Reference: translateIntrinsicFunctionReference,
-    f2008.Intrinsic_Function_Reference: translateIntrinsicFunctionReference,
     f2003.Actual_Arg_Spec_List: translateActualArgSpecList,
 
 
