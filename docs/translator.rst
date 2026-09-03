@@ -4,8 +4,8 @@ Code Generation
 OP2 uses a code translator to transform a user's sequential OP2 source files into parallelised variants targeting specific hardware backends. The current OP2 translator uses:
 
 - **libclang** to parse C/C++ source files.
-- **fparser2** (the ``fparser`` PyPI package) to parse Fortran source files by default.
-- **LLVM Flang** >= 23 (optional) to parse Fortran source files when ``--parser flang`` / ``OP2_FORTRAN_PARSER=flang`` is selected, via the ``op2-flang-scan`` helper.
+- **fparser2** (the ``fparser`` PyPI package) to parse Fortran source files (the default parser).
+- **LLVM Flang** >= 23 (optional) to parse Fortran source files when ``--parser flang`` or ``OP2_FORTRAN_PARSER=flang`` is selected, via the ``op2-flang-scan`` helper.
 - **Jinja2** to render backend-specific kernel code from templates.
 
 It is the recommended tool for all projects. A **legacy translator** is also retained for compatibility, consisting of a collection of standalone Python scripts.
@@ -34,7 +34,7 @@ The translator and its dependencies are bundled inside ``translator-v2/`` and ar
 .. note::
    No system Clang installation is required for C/C++ parsing.  The ``libclang`` PyPI wheel (pinned to 18.1.1 in ``requirements.txt``) is a self-contained ``manylinux`` wheel that bundles its own ``libclang.so`` — no ``apt install libclang-dev`` or equivalent is needed.  The ``fparser`` package provides the ``fparser.two`` (fparser2) API used to parse Fortran source files by default.
 
-   The optional LLVM Flang Fortran parser is a separate C++ helper (``op2-flang-scan``) built against LLVM's Flang libraries. See :doc:`getting_started` for install and ``LLVM_INSTALL_PATH`` / ``OP2_FORTRAN_PARSER`` instructions.
+   The optional LLVM Flang Fortran parser path uses a separate C++ helper (``op2-flang-scan``) built against LLVM's Flang libraries. See :doc:`getting_started` for install and setup instructions.
 
 Manual Usage
 ^^^^^^^^^^^^
@@ -68,7 +68,7 @@ Key options:
    * - ``-v``, ``--verbose``
      - Enable verbose output.
    * - ``--parser {fparser2,flang}``
-     - (Fortran) Stage 1 parser backend. Defaults to ``fparser2``. ``flang`` requires ``op2-flang-scan`` (built by ``make -C op2`` when LLVM Flang is configured).
+     - (Fortran) Parsing pipeline to use for translation. Defaults to ``fparser2``. ``flang`` requires ``op2-flang-scan`` (built by ``make -C op2`` when LLVM Flang is configured).
    * - ``--flang-scan <path>``
      - (Fortran) Path to the ``op2-flang-scan`` binary. Overrides ``OP2_FLANG_SCAN`` and the default search path.
 
@@ -121,10 +121,10 @@ Fortran Targets
 
 The language is detected automatically from the file extension (``.F90`` or ``.f90``). The same target name strings are used as for C/C++, and the translator selects the appropriate Fortran code-generation scheme.
 
-Fortran Parser Backends
-^^^^^^^^^^^^^^^^^^^^^^^
+Fortran Parsers
+^^^^^^^^^^^^^^^
 
-Two Stage-1 Fortran parsers are supported:
+Two Fortran parsers are supported by the translator, via separate paths of the translation pipeline:
 
 .. list-table::
    :header-rows: 1
@@ -135,15 +135,15 @@ Two Stage-1 Fortran parsers are supported:
    * - ``fparser2``
      - Default. Pure-Python parser from the ``fparser`` package. No extra native dependencies.
    * - ``flang``
-     - LLVM Flang via ``op2-flang-scan``. Broader Fortran standards coverage. Requires LLVM Flang >= 23 libraries at OP2 library build time (see :doc:`getting_started`).
+     - LLVM Flang parser via ``op2-flang-scan``, providing broader Fortran standards coverage and improved robustness. Requires LLVM Flang >= 23 libraries at OP2 library build time.
 
-When using the OP2 Makefiles, select the backend with the ``OP2_FORTRAN_PARSER`` environment variable (preferred) or by appending ``--parser flang`` to ``OP2_EXTRA_TRANSLATOR_FLAGS``. Direct translator invocation:
+When using the OP2 Makefiles, the default parser can be set with the ``OP2_FORTRAN_PARSER`` environment variable, or by appending ``--parser flang`` to ``OP2_EXTRA_TRANSLATOR_FLAGS``. Alternatively the parser can be selected directly at translator invocation:
 
 .. code-block:: shell
 
    python3 op2-translator --parser flang -t openmp -t c_cuda myapp.F90
 
-The translator locates ``op2-flang-scan`` in this order: ``--flang-scan``, ``OP2_FLANG_SCAN``, ``op2/bin/op2-flang-scan``, ``translator-v2/flang-scan/build/op2-flang-scan``, then ``PATH``. If Flang fails to parse a file, that file falls back to fparser2.
+The translator locates the ``op2-flang-scan`` binary in the search order: ``--flang-scan``, ``OP2_FLANG_SCAN``, ``op2/bin/op2-flang-scan``, ``translator-v2/flang-scan/build/op2-flang-scan``, then ``PATH``. If Flang fails to parse a file, that file falls back to fparser2.
 
 Example — generate Fortran OpenMP and C_CUDA variants:
 
@@ -245,9 +245,9 @@ When using the OP2 Makefiles (``makefiles/c_app.mk`` / ``makefiles/f_app.mk``), 
    * - ``APP_EXTRA_TRANSLATOR_FLAGS``
      - Extra command-line flags appended to every translator invocation for the application. Useful for passing additional ``-I`` include paths or ``-D`` defines that the translator needs to parse your source correctly, without altering the shared ``TRANSLATOR`` variable.
    * - ``OP2_EXTRA_TRANSLATOR_FLAGS``
-     - Extra translator flags from the environment, appended after ``APP_EXTRA_TRANSLATOR_FLAGS``. Use this from a driver script without editing app Makefiles (for example ``--parser flang``).
+     - Extra translator flags from the environment, appended after ``APP_EXTRA_TRANSLATOR_FLAGS`` (for example ``--parser flang``).
    * - ``OP2_FORTRAN_PARSER``
-     - Fortran Stage-1 parser: ``fparser2`` (default) or ``flang``. When set to ``flang``, ``makefiles/f_app.mk`` appends ``--parser flang`` and, if present, points ``OP2_FLANG_SCAN`` at ``$(OP2_BUILD_DIR)/bin/op2-flang-scan``.
+     - Fortran parser: ``fparser2`` (default) or ``flang``. When set to ``flang``, ``makefiles/f_app.mk`` appends ``--parser flang`` and, if present, points ``OP2_FLANG_SCAN`` at ``$(OP2_BUILD_DIR)/bin/op2-flang-scan``.
    * - ``OP2_FLANG_SCAN``
      - Optional path to the ``op2-flang-scan`` binary used with ``--parser flang``. If unset, the translator searches the library install location, the CMake build directory, and ``PATH``.
    * - ``VARIANT_FILTER``
