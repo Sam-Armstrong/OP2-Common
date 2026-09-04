@@ -1,33 +1,5 @@
 """
-Stage 2 semantic validation for kernels parsed with LLVM Flang (--parser flang).
-
-``fortran/validator.py`` implements Stage 2 (read/write/increment/slice/
-const-write/runtime-dimension checks) by walking fparser2's AST with parent
-pointers. This module ports the same checks to walk the simplified
-expression-tree JSON that ``op2-flang-scan`` attaches to each ``Function``
-as ``entity.flang_body`` (see the doc comment above ``emitBodyExpr`` in
-``translator-v2/flang-scan/op2-flang-scan.cpp``), so a loop whose kernel and
-all of its dependencies were parsed by Flang never needs an fparser2 AST.
-
-Node shapes recap (every node is a dict with a "kind" key):
-    {"kind": "name", "value": str}
-    {"kind": "literal"|"raw", "source": str}
-    {"kind": "part_ref", "name": str, "subscripts": [subscript, ...]}
-    {"kind": "triplet", "lower": expr|None, "upper": expr|None, "stride": expr|None}
-    {"kind": "funcref", "name": str, "args": [expr, ...]}
-    {"kind": "binary", "op": "+"|"-"|"*"|"/"|"**", "left": expr, "right": expr}
-    {"kind": "paren"|"unary", ("op": "+"|"-",) "expr": expr}
-
-Flang can't disambiguate a parenthesised reference between "array element"
-and "function call" without semantics, so most indexed references to a
-kernel parameter (e.g. `res1(1)`) show up as "funcref", not "part_ref"
-("part_ref" is only reachable via colon/triplet syntax, which forces the
-array interpretation at parse time). Every check below therefore treats
-"part_ref" and "funcref" as equivalent whenever the *base name* matches the
-identifier being searched for (a dummy parameter can't simultaneously be a
-subprogram name), and only consults the "is this name a known function"
-test - mirroring fparser2's own Part_Ref-vs-known-func disambiguation via
-``fortran.util.getCall`` - when the base name is something *else*.
+Semantic validation for kernels parsed with LLVM Flang (--parser flang).
 """
 
 from __future__ import annotations
@@ -138,10 +110,7 @@ def iter_all_names(func: Function) -> Iterator[str]:
         yield from local.get("dims", [])
 
 
-# -----------------------------------------------------------------------------
-# Call-graph propagation: Flang equivalent of fortran.util's
-# mapParam / findCalled / findCalled2 / getCall.
-# -----------------------------------------------------------------------------
+# Call-graph propagation
 
 def _find_calls_for_param(func: Function, param: str, funcs_by_name: Dict[str, Function]) -> List[Tuple[Function, int]]:
     """
@@ -213,6 +182,9 @@ def _find_calls_for_param(func: Function, param: str, funcs_by_name: Dict[str, F
 
 
 def find_called(func: Function, param_idx: int, funcs_by_name: Dict[str, Function]) -> List[Tuple[Function, int]]:
+    """
+    Equivalent to fortran.util's findCalled / findCalled2.
+    """
     checked: Dict[str, Set[int]] = {}
     stack: List[Tuple[Function, int]] = [(func, param_idx)]
 
@@ -247,6 +219,9 @@ def find_called(func: Function, param_idx: int, funcs_by_name: Dict[str, Functio
 
 
 def map_param(func: Function, param_idx: int, funcs: List[Function], op: Callable[..., Any], *args) -> None:
+    """
+    Equivalent to fortran.util's mapParam.
+    """
     funcs_by_name = {f.name: f for f in funcs}
     for f2, idx2 in find_called(func, param_idx, funcs_by_name):
         stop = op(f2, idx2, *args)
@@ -254,90 +229,7 @@ def map_param(func: Function, param_idx: int, funcs: List[Function], op: Callabl
             break
 
 
-# -----------------------------------------------------------------------------
-# Individual checks (ports of fortran/validator.py)
-# -----------------------------------------------------------------------------
-
-def checkConstRead(func: Function, const_ptrs: List[str], violations: List[str]) -> None:
-    def msg(const_ptr: str, line: int) -> str:
-        return f"In {func.name} (const {const_ptr}): {line}"
-
-    for assign in _flang_body(func)["assignments"]:
-        for const_ptr in const_ptrs:
-            if is_ref(assign["lhs"], const_ptr):
-                violations.append(msg(const_ptr, assign["line"]))
-                break
-
-
-def checkRead(func: Function, param_idx: int, violations: List[str]) -> None:
-    param = func.parameters[param_idx]
-
-    def msg(line: int) -> str:
-        return f"In {func.name} (arg {param_idx + 1}, {param}): {line}"
-
-    for assign in _flang_body(func)["assignments"]:
-        if is_ref(assign["lhs"], param):
-            violations.append(msg(assign["line"]))
-
-
-def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations: List[str]) -> None:
-    param = func.parameters[param_idx]
-    known_names = {f.name for f in funcs}
-
-    def msg(line: int) -> str:
-        return f"In {func.name} (arg {param_idx + 1}, {param}): {line}"
-
-    def visit(expr: Dict[str, Any], line: int, in_actual_arg: bool = False, in_subscript_of: Optional[bool] = None) -> None:
-        kind = expr.get("kind")
-
-        if kind == "name":
-            if expr.get("value") != param:
-                return
-            if in_actual_arg or in_subscript_of is True:
-                return
-            violations.append(msg(line))
-            return
-
-        if kind in ("part_ref", "funcref"):
-            if expr.get("name") == param:
-                if kind == "part_ref":
-                    for sub in expr.get("subscripts", []):
-                        if sub.get("kind") == "triplet":
-                            violations.append(msg(line))
-                            break
-                # Matches the original `continue`: no default violation for
-                # this occurrence itself, whether or not a slice was found.
-
-            if kind == "part_ref":
-                for sub in expr.get("subscripts", []):
-                    if sub.get("kind") == "triplet":
-                        for part in ("lower", "upper", "stride"):
-                            if sub.get(part) is not None:
-                                visit(sub[part], line)
-                    else:
-                        visit(sub, line, in_subscript_of=(expr.get("name") in known_names))
-            else:
-                for arg in expr.get("args", []):
-                    visit(arg, line, in_actual_arg=True)
-            return
-
-        if kind == "binary":
-            visit(expr["left"], line)
-            visit(expr["right"], line)
-            return
-
-        if kind in ("paren", "unary"):
-            visit(expr["expr"], line)
-            return
-
-    body = _flang_body(func)
-    for assign in body["assignments"]:
-        visit(assign["lhs"], assign["line"])
-        visit(assign["rhs"], assign["line"])
-    for call in body["calls"]:
-        for arg in call.get("args", []):
-            visit(arg, call["line"], in_actual_arg=True)
-
+# Individual check helpers
 
 def _is_safe_call_arg(occurrence: Dict[str, Any], body: Dict[str, Any], known_names: Set[str]) -> bool:
     """
@@ -426,6 +318,19 @@ def _linearize_increment(node: Dict[str, Any], ref_name: str, count: List[int]) 
     return inc_sym()
 
 
+# Individual checks (equivalent to fortran/validator.py)
+
+def checkConstRead(func: Function, const_ptrs: List[str], violations: List[str]) -> None:
+    def msg(const_ptr: str, line: int) -> str:
+        return f"In {func.name} (const {const_ptr}): {line}"
+
+    for assign in _flang_body(func)["assignments"]:
+        for const_ptr in const_ptrs:
+            if is_ref(assign["lhs"], const_ptr):
+                violations.append(msg(const_ptr, assign["line"]))
+                break
+
+
 def checkInc(func: Function, param_idx: int, funcs: List[Function], violations: List[str]) -> None:
     param = func.parameters[param_idx]
     funcs_by_name = {f.name: f for f in funcs}
@@ -488,6 +393,17 @@ def checkInc(func: Function, param_idx: int, funcs: List[Function], violations: 
             violations.append(msg(f"non increment: {a['line']}"))
 
 
+def checkRead(func: Function, param_idx: int, violations: List[str]) -> None:
+    param = func.parameters[param_idx]
+
+    def msg(line: int) -> str:
+        return f"In {func.name} (arg {param_idx + 1}, {param}): {line}"
+
+    for assign in _flang_body(func)["assignments"]:
+        if is_ref(assign["lhs"], param):
+            violations.append(msg(assign["line"]))
+
+
 def checkRuntimeDimensionArrays(func: Function, consts: Set[str], violations: List[str]) -> None:
     blacklist = set(consts) | set(func.parameters)
 
@@ -501,9 +417,66 @@ def checkRuntimeDimensionArrays(func: Function, consts: Set[str], violations: Li
                 violations.append(f"In {func.name}: variable {name}, dimension {dim_name}")
 
 
-# -----------------------------------------------------------------------------
-# Top-level entry point (port of fortran.validator.validateLoop)
-# -----------------------------------------------------------------------------
+def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations: List[str]) -> None:
+    param = func.parameters[param_idx]
+    known_names = {f.name for f in funcs}
+
+    def msg(line: int) -> str:
+        return f"In {func.name} (arg {param_idx + 1}, {param}): {line}"
+
+    def visit(expr: Dict[str, Any], line: int, in_actual_arg: bool = False, in_subscript_of: Optional[bool] = None) -> None:
+        kind = expr.get("kind")
+
+        if kind == "name":
+            if expr.get("value") != param:
+                return
+            if in_actual_arg or in_subscript_of is True:
+                return
+            violations.append(msg(line))
+            return
+
+        if kind in ("part_ref", "funcref"):
+            if expr.get("name") == param:
+                if kind == "part_ref":
+                    for sub in expr.get("subscripts", []):
+                        if sub.get("kind") == "triplet":
+                            violations.append(msg(line))
+                            break
+                # Matches the original `continue`: no default violation for
+                # this occurrence itself, whether or not a slice was found.
+
+            if kind == "part_ref":
+                for sub in expr.get("subscripts", []):
+                    if sub.get("kind") == "triplet":
+                        for part in ("lower", "upper", "stride"):
+                            if sub.get(part) is not None:
+                                visit(sub[part], line)
+                    else:
+                        visit(sub, line, in_subscript_of=(expr.get("name") in known_names))
+            else:
+                for arg in expr.get("args", []):
+                    visit(arg, line, in_actual_arg=True)
+            return
+
+        if kind == "binary":
+            visit(expr["left"], line)
+            visit(expr["right"], line)
+            return
+
+        if kind in ("paren", "unary"):
+            visit(expr["expr"], line)
+            return
+
+    body = _flang_body(func)
+    for assign in body["assignments"]:
+        visit(assign["lhs"], assign["line"])
+        visit(assign["rhs"], assign["line"])
+    for call in body["calls"]:
+        for arg in call.get("args", []):
+            visit(arg, call["line"], in_actual_arg=True)
+
+
+# Entry points
 
 def can_validate_with_flang(loop: OP.Loop, program: Program, app: Application) -> bool:
     """
