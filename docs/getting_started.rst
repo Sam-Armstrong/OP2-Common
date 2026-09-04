@@ -13,7 +13,7 @@ Toolchain and Build Dependencies
 - Optional: **MPI implementation** supporting ``mpicc``, ``mpicxx``, and ``mpif90`` compiler wrappers.
 - Optional: **NVIDIA CUDA** >= 11.8
 - Optional: **AMD HIP** (ROCm)
-- Optional: **CMake** >= 3.20 and **LLVM Flang** >= 23 (parser libraries). Required to build ``op2-flang-scan``, the helper used by the optional LLVM Flang Fortran parser translation path. See `LLVM Flang (optional Fortran parser)`_ below.
+- Optional: **CMake** >= 3.20 and **LLVM Flang** >= 23 (parser libraries). Required to build ``op2-flang-scan``, the helper used by the optional LLVM Flang Fortran parser translation path.
 
 These are likely provided in some form by either your distribution's package manager or pre-installed and loaded via commands such as with `Environment Modules <http://modules.sourceforge.net/>`_.
 
