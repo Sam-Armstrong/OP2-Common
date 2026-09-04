@@ -316,10 +316,6 @@ endef
 # Expand the template for all of the libraries (seq, ..., mpi_cuda)
 $(foreach lib,$(OP2_LIBS),$(eval $(call OP2_LIB_RULES_template,$(lib))))
 
-# op2-flang-scan: C++ helper that drives LLVM Flang for --parser flang.
-# Built into $(BIN) when LLVM Flang was found at `make config` time.
-# The CMake build directory lives under $(OBJ) so `make clean` removes it and
-# so a root-owned leftover in translator-v2/flang-scan/build cannot block us.
 FLANG_SCAN_SRC := $(ROOT_DIR)/translator-v2/flang-scan
 FLANG_SCAN_BUILD := $(OBJ)/flang-scan
 FLANG_SCAN_BIN := $(BIN)/op2-flang-scan
@@ -340,5 +336,5 @@ $(FLANG_SCAN_BIN): $(FLANG_SCAN_SRC)/op2-flang-scan.cpp \
 else
 flang-scan:
 	$(error LLVM Flang was not found. Set LLVM_INSTALL_PATH to an LLVM+Flang \
-prefix and re-run "make -C op2 config". See docs/getting_started.rst)
+prefix (>=23) and re-run "make -C op2 config". See docs/getting_started.rst)
 endif

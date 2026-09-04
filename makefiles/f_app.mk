@@ -17,7 +17,7 @@ ifeq ($(OP2_FORTRAN_PARSER),flang)
       export OP2_FLANG_SCAN := $(OP2_BUILD_DIR)/bin/op2-flang-scan
     endif
   endif
-endif 
+endif
 
 ifneq ($(F_HAS_PARALLEL_BUILDS),true)
   .NOTPARALLEL:
