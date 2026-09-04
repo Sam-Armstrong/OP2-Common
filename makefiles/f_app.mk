@@ -1,12 +1,9 @@
 TRANSLATOR ?= $(ROOT_DIR)/translator-v2/op2-translator.sh -v
 
-# Extra flags forwarded to the OP2 translator (e.g. "--parser flang").
-# Use environment variable OP2_EXTRA_TRANSLATOR_FLAGS to inject flags from a
-# driver script without editing app Makefiles.
+# Extra flags forwarded to the OP2 translator
 OP2_EXTRA_TRANSLATOR_FLAGS ?=
 
-# Fortran Stage-1 parser: fparser2 (default) or flang (LLVM Flang via
-# op2-flang-scan). Setting OP2_FORTRAN_PARSER=flang appends --parser flang.
+# Fortran parser pipeline (fparser2 or flang)
 OP2_FORTRAN_PARSER ?= fparser2
 
 ifneq ($(filter $(OP2_FORTRAN_PARSER),fparser2 flang),$(OP2_FORTRAN_PARSER))
@@ -20,7 +17,7 @@ ifeq ($(OP2_FORTRAN_PARSER),flang)
       export OP2_FLANG_SCAN := $(OP2_BUILD_DIR)/bin/op2-flang-scan
     endif
   endif
-endif
+endif 
 
 ifneq ($(F_HAS_PARALLEL_BUILDS),true)
   .NOTPARALLEL:
