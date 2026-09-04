@@ -1,13 +1,3 @@
-"""
-Lazy fparser2 attachment for programs parsed with --parser flang.
-
-Stage 1 under Flang produces loops, consts, and kernel source text without
-building an fparser2 AST. Validation (Stage 2), main-program translation, and
-kernel schemes that still mutate fparser2 nodes can call `ensure_fparser2_ast`
-to parse the already-preprocessed `program.source` once and attach AST nodes
-to matching entities by name.
-"""
-
 from __future__ import annotations
 
 import sys
@@ -30,11 +20,10 @@ def ensure_fparser2_ast(
     defines: List[str],
 ) -> bool:
     """
-    Parse `program.source` with fparser2 if `program.ast` is still missing.
+    Parse `program.source` with fparser2 if `program.ast` is missing.
 
-    Returns True when an AST is available afterwards (either it was already
-    present or parsing succeeded). Returns False if fparser2 could not parse
-    the file; callers should treat downstream AST-dependent steps as unavailable.
+    Returns True when an AST is available afterwards, False if fparser2
+    could not parse the file.
     """
     del defines  # preprocessing already applied; kept for API symmetry
 
@@ -58,8 +47,7 @@ def ensure_fparser2_ast(
 
 def _attach_entity_asts(program: Program, ast) -> None:
     """
-    Walk a freshly-built fparser2 tree and copy subprogram AST nodes onto
-    Flang-built entities with the same name.
+    Walk an fparser2 AST and copy subprogram nodes onto Flang-built entities with the same name.
     """
     temp = fortran.parser.parseProgram(ast, program.source, program.path)
     ast_by_name = {
@@ -75,8 +63,7 @@ def _attach_entity_asts(program: Program, ast) -> None:
         if node is not None:
             entity.ast = node
 
-    # If Flang missed a subprogram that fparser2 found, add it so downstream
-    # code can still resolve dependencies (Stage 1 completeness fallback).
+    # if Flang missed a subprogram that fparser2 found, add it so downstream code can still resolve dependencies
     existing = {entity.name.lower() for entity in program.entities}
     for entity in temp.entities:
         if not isinstance(entity, Function):
