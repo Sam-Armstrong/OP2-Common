@@ -13,7 +13,7 @@ Toolchain and Build Dependencies
 - Optional: **MPI implementation** supporting ``mpicc``, ``mpicxx``, and ``mpif90`` compiler wrappers.
 - Optional: **NVIDIA CUDA** >= 11.8
 - Optional: **AMD HIP** (ROCm)
-- Optional: **CMake** >= 3.20 and **LLVM Flang** >= 23 (parser libraries). Required only to build ``op2-flang-scan``, the helper used by the optional LLVM Flang Fortran parser. See `LLVM Flang (optional Fortran parser)`_ below.
+- Optional: **CMake** >= 3.20 and **LLVM Flang** >= 23 (parser libraries). Required to build ``op2-flang-scan``, the helper used by the optional LLVM Flang Fortran parser translation path. See `LLVM Flang (optional Fortran parser)`_ below.
 
 These are likely provided in some form by either your distribution's package manager or pre-installed and loaded via commands such as with `Environment Modules <http://modules.sourceforge.net/>`_.
 
@@ -101,9 +101,7 @@ If you are using CUDA or HIP, you may also specify a comma separated list of tar
    A new folder ``generated`` will be created inside the example app folder containing the generated source files. The compiled executable will be in the example app folder.
 
 .. note::
-   If LLVM Flang was found during ``make config``, ``make -C op2`` also builds the
-   ``op2-flang-scan`` helper and installs it to ``op2/bin/op2-flang-scan``.
-   You can build just the scanner with ``make -C op2 flang-scan``.
+   If LLVM Flang was found during ``make config``, ``make -C op2`` also builds the ``op2-flang-scan`` helper and installs it to ``op2/bin/op2-flang-scan``. The scanner can be built separately with ``make -C op2 flang-scan``.
 
 .. warning::
    MPI builds require an MPI wrapper (``mpicxx``) pointing to the compiler defined by ``OP2_COMPILER``. You can manually set the MPI executable path using ``MPI_INSTALL_PATH``.
@@ -176,25 +174,15 @@ For example, to build the Fortran Airfoil benchmark with JIT CUDA:
 
 See :ref:`op2-fortran-api` for the Fortran API reference and :doc:`translator` for Fortran code generation targets.
 
-To use the LLVM Flang parser instead of the default fparser2 frontend when
-generating Fortran variants, set ``OP2_FORTRAN_PARSER`` (see below).
-
 LLVM Flang (optional Fortran parser)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-By default the OP2 translator parses Fortran with **fparser2** (a pip-installed
-Python package bundled with translator-v2). An optional **LLVM Flang** frontend
-is also available: it uses the Flang parser libraries via a small C++ helper
-(``op2-flang-scan``) and typically offers better Fortran standards coverage.
-fparser2 remains the default; Flang is opt-in.
+By default the OP2 translator parses Fortran with **fparser2**; **LLVM Flang** is an optional alternative parsing path which uses the Flang parser libraries via a C++ helper (``op2-flang-scan``). This typically offers better Fortran standards coverage and improved robustness over fparser2, but can be somewhat tedious (and storage intensive) to install.
 
 Installing LLVM Flang
 """""""""""""""""""""
 
-``op2-flang-scan`` uses LLVM Flang's parse-tree API, which is **not
-stable across releases**. The scanner is written for the tuple-class
-layout (``CallStmt::t``, ``ArrayElement::Subscripts()``,
-``LoopBounds::Name()``, ...) that first shipped in **LLVM 23**.
+The ``op2-flang-scan`` scanner uses LLVM Flang's parse-tree API via the tuple-class layout that was introduced in **LLVM 23**.
 
 **Requirement: LLVM Flang >= 23**, including:
 
@@ -203,17 +191,11 @@ layout (``CallStmt::t``, ``ArrayElement::Subscripts()``,
 - The LLVM CMake package (``lib/cmake/llvm/LLVMConfig.cmake``)
 - **CMake** >= 3.20 (and optionally **Ninja**)
 
-LLVM 18--22 still expose the older named-member layout and will not
-compile the scanner. That includes Ubuntu 24.04 **archive** packages
-(``libflang-18-dev`` … ``libflang-20-dev``).
+LLVM 18-22 expose an older named-member layout which is not compatible with the scanner.
 
 **1. Distro packages (LLVM >= 23)**
 
-On Debian / Ubuntu, official archive packages currently stop at LLVM 20
-and are too old. Use the LLVM project's APT repository instead
-(`apt.llvm.org <https://apt.llvm.org/>`_), which publishes
-``libflang-23-dev`` (and newer) for supported releases including Ubuntu
-24.04 (noble):
+On Debian / Ubuntu, official archive packages do not currently cover LLVM 23 and later. The LLVM project's APT repository can be used instead (`apt.llvm.org <https://apt.llvm.org/>`_), which publishes ``libflang-23-dev`` (and newer) for supported releases.
 
 .. code-block:: shell
 
@@ -223,10 +205,9 @@ and are too old. Use the LLVM project's APT repository instead
    sudo apt-get install -y libflang-23-dev llvm-23-dev cmake ninja-build
    export LLVM_INSTALL_PATH=/usr/lib/llvm-23
 
-Replace ``23`` with a later version if you prefer (``24``, ...).
-``apt search libflang`` will show what is available.
+``23`` can be replaced with a later version, ``apt search libflang`` will show the available versions.
 
-On Fedora (when the packaged Flang is >= 23):
+Alternatively, on Fedora (when the packaged Flang is >= 23):
 
 .. code-block:: shell
 
@@ -240,18 +221,11 @@ On Fedora (when the packaged Flang is >= 23):
    brew install llvm cmake ninja
    export LLVM_INSTALL_PATH="$(brew --prefix llvm)"
 
-Confirm ``$(brew --prefix llvm)/bin/llvm-config --version`` is **>= 23**.
-If configure/compile fails on parse-tree members such as
-``CallStmt::t`` or ``ArrayElement::Subscripts``, the Homebrew LLVM is
-too old; use a newer bottle or the from-source recipe below.
+Confirm ``$(brew --prefix llvm)/bin/llvm-config --version`` is **>= 23** to ensure a compatible version is installed. If this is not available, the from-source build recipe below can be used instead.
 
 **3. Build from source**
 
-Build from source if a >= 23 package is not available, or if you want
-to track LLVM ``main``. A from-source build of ``llvm-project`` with
-Flang and MLIR typically takes 30--60 minutes and around 15--30 GB of
-disk. On WSL, build on the Linux filesystem (e.g. ``$HOME``), not
-``/mnt/c``.
+A from source build of ``llvm-project`` with Flang and MLIR typically takes 30-60 minutes and around 20-30 GB of disk space. On WSL, build on the Linux filesystem (``$HOME``), not ``/mnt/c``.
 
 .. code-block:: shell
 
@@ -271,27 +245,12 @@ disk. On WSL, build on the Linux filesystem (e.g. ``$HOME``), not
    cmake --build build --target install -j$(nproc)
    export LLVM_INSTALL_PATH=$HOME/.local/llvm
 
-``op2-flang-scan`` only needs the parser libraries, not a full Clang/Flang
-compiler toolchain, which is why ``LLVM_ENABLE_PROJECTS`` omits ``clang``.
-MLIR is required to *build* Flang itself even though the scanner does not
-lower to MLIR.
-
-**4. Windows**
-
-Use WSL and either the apt.llvm.org packages or the from-source recipe
-above. Native Windows builds of Flang are not routinely tested against
-``op2-flang-scan``.
-
-If ``make config`` can see CMake and a valid prefix, it prints
-``LLVM Flang FOUND (<prefix>)``. You do not need to set ``LLVM_INSTALL_PATH``
-when Flang is already in a well-known location (``$HOME/.local/llvm``,
-``llvm-config --prefix``, or ``/usr/lib/llvm-<ver>``).
+``op2-flang-scan`` only needs the parser libraries, not a full Clang/Flang compiler toolchain, which is why ``LLVM_ENABLE_PROJECTS`` omits ``clang``. MLIR is required to build Flang, even though the scanner does not lower to MLIR.
 
 Building ``op2-flang-scan``
 """""""""""""""""""""""""""
 
-Once LLVM Flang is installed, configure and build OP2 as usual. The library
-build compiles the scanner and installs it next to the OP2 libraries:
+Once LLVM Flang is installed, configure and build OP2 as usual. The library build compiles the scanner and installs it next to the OP2 libraries:
 
 .. code-block:: shell
 
@@ -305,49 +264,32 @@ The binary is installed to ``op2/bin/op2-flang-scan``. To build only the scanner
 
    make -C op2 flang-scan
 
-You can also configure the scanner by hand (see ``translator-v2/flang-scan/README.md``):
-
-.. code-block:: shell
-
-   cmake -S translator-v2/flang-scan -B translator-v2/flang-scan/build \
-       -DCMAKE_BUILD_TYPE=Release \
-       -DCMAKE_PREFIX_PATH=$LLVM_INSTALL_PATH
-   cmake --build translator-v2/flang-scan/build
-
 Using the Flang parser
 """"""""""""""""""""""
 
-The translator still defaults to fparser2. To switch Fortran code generation
-to Flang, set ``OP2_FORTRAN_PARSER`` before building an application:
+The translator still defaults to fparser2. To change the translation pipeline to use Flang, set ``OP2_FORTRAN_PARSER`` before building an application:
 
 .. code-block:: shell
 
    export OP2_FORTRAN_PARSER=flang
    make -C apps/fortran/airfoil airfoil_plain_genseq
 
-Equivalent mechanisms (any one is sufficient):
+Equivalently, any one of the following mechanisms can be used to switch to the Flang pipeline:
 
 .. list-table::
    :header-rows: 1
    :widths: 35 65
 
-   * - Variable / flag
+   * - Variable / Flag
      - Description
    * - ``OP2_FORTRAN_PARSER=flang``
-     - Preferred. Forwarded by ``makefiles/f_app.mk`` as ``--parser flang``.
-       Allowed values: ``fparser2`` (default), ``flang``.
+     - Forwarded by ``makefiles/f_app.mk`` as ``--parser flang``. Allowed values: ``fparser2`` (default), ``flang``.
    * - ``OP2_EXTRA_TRANSLATOR_FLAGS=--parser flang``
-     - Extra flags appended to every translator invocation (Fortran and any
-       other flags you already pass this way).
-   * - ``OP2_FLANG_SCAN=<path>``
-     - Optional path to the ``op2-flang-scan`` binary. If unset, the translator
-       looks for ``op2/bin/op2-flang-scan``, then
-       ``translator-v2/flang-scan/build/op2-flang-scan``, then ``PATH``.
+     - Extra flags appended to every translator invocation.
    * - ``--parser flang`` / ``--flang-scan <path>``
-     - Same options when invoking the translator directly
-       (see :doc:`translator`).
+     - Same options when invoking the translator directly.
 
-Example — generate and run sequential Airfoil with Flang:
+For example, to translate and run sequential Airfoil with the Flang pipeline:
 
 .. code-block:: shell
 
@@ -359,7 +301,7 @@ Example — generate and run sequential Airfoil with Flang:
    make -C apps/fortran/airfoil airfoil_plain_genseq
    ./apps/fortran/airfoil/airfoil_plain_genseq
 
-If Flang fails to parse a file, that file falls back to fparser2 automatically.
+If Flang fails to parse a file, that file falls back to fparser2 automatically, avoiding any possible regressions.
 
 Spack
 -----
