@@ -22,7 +22,9 @@ _FLANG_FALLBACK_WARNED: set = set()
 
 
 def _all_entities_have_flang_source(entities: Iterable) -> bool:
-    """Return True iff every entity is a Function and carries a flang_source."""
+    """
+    Return True iff every entity is a Function and carries a flang_source
+    """
     saw_any = False
     for e in entities:
         if not isinstance(e, Function):
@@ -34,8 +36,9 @@ def _all_entities_have_flang_source(entities: Iterable) -> bool:
 
 
 def _use_flang_kernels_c(lang: Lang, entities: Iterable) -> bool:
-    """Return True iff --parser flang is selected and every entity carries
-    the flang_body JSON that fortran/flang_kernels_c.py (Stage 3) needs."""
+    """
+    Return True iff --parser flang is selected and every entity carries flang_body
+    """
     if getattr(lang, "requested_parser", "fparser2") != "flang":
         return False
 
