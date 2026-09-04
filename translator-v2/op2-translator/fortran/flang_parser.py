@@ -317,7 +317,7 @@ _PAR_LOOP_RE = re.compile(r"^op_par_loop_\d+$")
 _SUBPROGRAM_KINDS = ("subroutine_subprogram", "function_subprogram")
 
 
-def app_has_flang_stage1(app: Application) -> bool:
+def parsed_with_flang(app: Application) -> bool:
     """Return True if any program in the application was parsed with Flang."""
     return any(getattr(p, "used_parser", "fparser2") == "flang" for p in app.programs)
 

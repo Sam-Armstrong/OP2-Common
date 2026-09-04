@@ -260,7 +260,7 @@ class Fortran(Lang):
             print(f"Using packaged fpp for Fortran parsing: {fpp}")
 
     def validate(self, app: Application) -> None:
-        if fortran.flang_parser.app_has_flang_stage1(app):
+        if fortran.flang_parser.parsed_with_flang(app):
             fortran.flang_parser.resolve_flang_dependencies(app)
 
         for program in app.programs:
