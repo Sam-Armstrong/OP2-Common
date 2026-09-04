@@ -74,20 +74,6 @@ class Function(Entity):
     parameters: List[str] = field(default_factory=list)
     returns: Optional[OP.Type] = None
 
-    # NOTE: When Stage 1 runs with --parser flang, fortran.flang_parser sets
-    # `flang_source` and `flang_body` attributes on each matching Function
-    # via setattr. We do NOT declare them as dataclass fields here because
-    # simple-default fields (`x: T = None`) install a class-level attribute
-    # that fools the custom `Entity.__deepcopy__` into skipping the
-    # per-instance copy, so the attached data would silently vanish across a
-    # deepcopy. Treat them as dynamic attributes, e.g.
-    # `getattr(entity, "flang_source", None)` / `getattr(entity, "flang_body", None)`.
-    #
-    # `flang_body` (used by fortran/flang_validator.py for Stage 2 checks
-    # without fparser2) is a dict: {"locals": [...], "assignments": [...],
-    # "calls": [...]} - see the doc comment above emitBodyExpr in
-    # translator-v2/flang-scan/op2-flang-scan.cpp for the expr-tree shape.
-
     def __str__(self):
         return f"Function(name='{self.name}', scope={self.scope}, depends={self.depends})"
 

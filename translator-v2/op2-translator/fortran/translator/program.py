@@ -8,36 +8,17 @@ from store import Program
 
 def translateProgram2(program: Program, force_soa: bool) -> str:
     """
-    Regex-based (AST-free) main-program translation.
+    Regex-based (no AST) main-program translation.
 
-    This is the counterpart to `translateProgram` for programs that don't
-    have (and, under `--parser flang`, are never given) an fparser2 AST: it
-    rewrites `program.source` directly with a handful of targeted regexes
-    instead of walking/mutating a parse tree. It performs the same three
-    rewrites as the AST version:
-
-      1. `call op_decl_const(ptr, dim, 'type')` -> `call op_decl_const_ptr(ptr, dim)`,
-         routing const registration through the per-app `op2_consts` module's
-         generated per-constant subroutine (see consts.F90.jinja) instead of
-         the generic op2 runtime interface.
-      2. `call op_par_loop_N(kernel, set, ...)` -> `call op2_k_<file>_<n>_kernel("kernel", ...)`,
-         matching the per-loop host subroutine names the code generator emits.
-      3. Add `use op2_kernels` alongside `use op2_fortran_reference`.
+    It rewrites `program.source` directly with targeted regexes instead of walking/mutating an
+    AST, performing the same rewrites as `translateProgram`.
     """
     src = program.source
     kernel_id = 1
 
-    flags = re.MULTILINE | re.IGNORECASE
-
     def repl_const(m):
         const_ptr = m.group(2)
         return f"{m.group(1)}call op_decl_const_{const_ptr.lower()}({const_ptr}, {m.group(3).strip()})"
-
-    # The type argument is a character literal (e.g. "real(8)") that itself
-    # contains parentheses, so the dim argument is matched non-greedily up to
-    # the first comma and the type argument is matched greedily to the LAST
-    # ")" on the line (assumes - like the op_par_loop regex below - that the
-    # call fits on one logical line, true for translator-generated sources).
 
     def repl_loop(m):
         nonlocal kernel_id
@@ -46,6 +27,8 @@ def translateProgram2(program: Program, force_soa: bool) -> str:
         kernel_id += 1
 
         return r
+
+    flags = re.MULTILINE | re.IGNORECASE
 
     src = re.sub(
         r"^(\s*)call\s*op_decl_const\s*\(\s*(\w+)\s*,\s*([^,]+),\s*.*\)\s*$",
