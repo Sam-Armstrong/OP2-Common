@@ -196,7 +196,7 @@ def parse(args: Namespace, lang: Lang) -> Application:
     parse_programs = getattr(lang, "parsePrograms", None)
     use_flang_batch = (
         callable(parse_programs)
-        and getattr(lang, "stage1_parser", None) == "flang"
+        and getattr(lang, "requested_parser", None) == "flang"
         and not args.multiprocess_parse
     )
 

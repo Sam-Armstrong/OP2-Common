@@ -8,10 +8,10 @@ from store import Program
 
 def translateProgram2(program: Program, force_soa: bool) -> str:
     """
-    Regex-based (no AST) main-program translation.
+    Regex-based main-program translation.
 
-    It rewrites `program.source` directly with targeted regexes instead of walking/mutating an
-    AST, performing the same rewrites as `translateProgram`.
+    Rewrites `program.source` directly with targeted regexes instead of walking
+    and mutating an AST, performing the same rewrites as `translateProgram`.
     """
     src = program.source
     kernel_id = 1

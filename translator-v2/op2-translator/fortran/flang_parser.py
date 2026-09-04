@@ -319,7 +319,7 @@ _SUBPROGRAM_KINDS = ("subroutine_subprogram", "function_subprogram")
 
 def app_has_flang_stage1(app: Application) -> bool:
     """Return True if any program in the application was parsed with Flang."""
-    return any(getattr(p, "stage1_backend", "fparser2") == "flang" for p in app.programs)
+    return any(getattr(p, "used_parser", "fparser2") == "flang" for p in app.programs)
 
 
 def build_program_from_flang(path: Path, source: str, data: Dict[str, Any]) -> Program:
@@ -333,7 +333,7 @@ def build_program_from_flang(path: Path, source: str, data: Dict[str, Any]) -> P
     into the ``Application``.
     """
     program = Program(path, None, source)
-    setattr(program, "stage1_backend", "flang")
+    setattr(program, "used_parser", "flang")
 
     for event in data.get("events", []):
         kind = str(event.get("kind", ""))

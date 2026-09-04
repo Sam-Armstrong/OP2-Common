@@ -17,27 +17,8 @@ from target import Target
 from util import find
 
 
-# -----------------------------------------------------------------------------
-# Helpers for routing kernel translation through the Flang code path.
-# -----------------------------------------------------------------------------
-
-# Schemes that have already warned the user that they fall back to fparser2
-# under --parser flang. Keyed by scheme name to keep the noise to one line per
-# scheme per translator run.
+# Schemes that have already warned the user that they fall back to fparser2 under --parser flang
 _FLANG_FALLBACK_WARNED: set = set()
-
-
-def _warn_flang_fallback_once(lang: Lang, scheme_name: str) -> None:
-    if getattr(lang, "stage1_parser", "fparser2") != "flang":
-        return
-    if scheme_name in _FLANG_FALLBACK_WARNED:
-        return
-    _FLANG_FALLBACK_WARNED.add(scheme_name)
-    print(
-        f"Warning: --parser flang does not yet drive kernel translation for "
-        f"{scheme_name}; falling back to the fparser2 path for this scheme.",
-        file=sys.stderr,
-    )
 
 
 def _all_entities_have_flang_source(entities: Iterable) -> bool:
@@ -55,10 +36,23 @@ def _all_entities_have_flang_source(entities: Iterable) -> bool:
 def _use_flang_kernels_c(lang: Lang, entities: Iterable) -> bool:
     """Return True iff --parser flang is selected and every entity carries
     the flang_body JSON that fortran/flang_kernels_c.py (Stage 3) needs."""
-    if getattr(lang, "stage1_parser", "fparser2") != "flang":
+    if getattr(lang, "requested_parser", "fparser2") != "flang":
         return False
 
     return fk_c.canTranslateWithFlang(list(entities))
+
+
+def _warn_flang_fallback_once(lang: Lang, scheme_name: str) -> None:
+    if getattr(lang, "requested_parser", "fparser2") != "flang":
+        return
+    if scheme_name in _FLANG_FALLBACK_WARNED:
+        return
+    print(
+        f"Warning: --parser flang does not yet drive kernel translation for "
+        f"{scheme_name}; falling back to the fparser2 path for this scheme.",
+        file=sys.stderr,
+    )
+    _FLANG_FALLBACK_WARNED.add(scheme_name)
 
 
 class FortranSeq(Scheme):
@@ -91,7 +85,7 @@ class FortranSeq(Scheme):
         all_entities = kernel_entities + dependencies
 
         use_flang = (
-            getattr(self.lang, "stage1_parser", "fparser2") == "flang"
+            getattr(self.lang, "requested_parser", "fparser2") == "flang"
             and _all_entities_have_flang_source(all_entities)
         )
 
@@ -152,7 +146,7 @@ class FortranOpenMP(Scheme):
             ]
 
         use_flang = (
-            getattr(self.lang, "stage1_parser", "fparser2") == "flang"
+            getattr(self.lang, "requested_parser", "fparser2") == "flang"
             and _all_entities_have_flang_source(all_entities)
         )
 
@@ -282,7 +276,7 @@ class FortranCuda(Scheme):
             return arg.access_type == OP.AccessType.WORK
 
         use_flang = (
-            getattr(self.lang, "stage1_parser", "fparser2") == "flang"
+            getattr(self.lang, "requested_parser", "fparser2") == "flang"
             and _all_entities_have_flang_source(all_entities)
         )
 
