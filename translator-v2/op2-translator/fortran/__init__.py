@@ -198,19 +198,6 @@ class Fortran(Lang):
                 self, program, self._include_dirs, self._defines
             )
 
-    def _parseProgramFparser2(
-        self, path: Path, source: str, include_dirs: Set[Path]
-    ) -> Program:
-        try:
-            reader = FortranStringReader(source, include_dirs=list(include_dirs))
-            ast = self.parser(reader)
-        except fparser.two.utils.FortranSyntaxError as err:
-            raise FortranSyntaxError(str(err), path.name)
-
-        program = fortran.parser.parseProgram(ast, source, path)
-        setattr(program, "used_parser", "fparser2")
-        return program
-
     def addArgs(self, parser: ArgumentParser) -> None:
         parser.add_argument("--consts-module", help="(Fortran) Custom consts module")
 
@@ -286,7 +273,7 @@ class Fortran(Lang):
         for loop, program in app.loops():
             used_parser = getattr(program, "used_parser", "fparser2")
 
-            # Use the Flang validator whenever the kernel and all its dependencies were parsed by Flang
+            # use the Flang validator whenever the kernel and all its dependencies were parsed by Flang
             if used_parser == "flang" and fortran.flang_validator.can_validate_with_flang(loop, program, app):
                 fortran.flang_validator.validateLoop(loop, program, app)
                 continue
@@ -369,7 +356,20 @@ class Fortran(Lang):
                     file=sys.stderr,
                 )
 
-        return self._parseProgramFparser2(path, source, include_dirs)
+        return self.parseProgramFparser2(path, source, include_dirs)
+
+    def parseProgramFparser2(
+        self, path: Path, source: str, include_dirs: Set[Path]
+    ) -> Program:
+        try:
+            reader = FortranStringReader(source, include_dirs=list(include_dirs))
+            ast = self.parser(reader)
+        except fparser.two.utils.FortranSyntaxError as err:
+            raise FortranSyntaxError(str(err), path.name)
+
+        program = fortran.parser.parseProgram(ast, source, path)
+        setattr(program, "used_parser", "fparser2")
+        return program
 
     def parsePrograms(
         self, paths: List[Path], include_dirs: Set[Path], defines: List[str]
@@ -412,7 +412,7 @@ class Fortran(Lang):
                     f"falling back to fparser2: {data['error']}",
                     file=sys.stderr,
                 )
-                programs.append(self._parseProgramFparser2(path, source, include_dirs))
+                programs.append(self.parseProgramFparser2(path, source, include_dirs))
                 continue
             try:
                 programs.append(
@@ -424,7 +424,7 @@ class Fortran(Lang):
                     f"falling back to fparser2: {err}",
                     file=sys.stderr,
                 )
-                programs.append(self._parseProgramFparser2(path, source, include_dirs))
+                programs.append(self.parseProgramFparser2(path, source, include_dirs))
         return programs
 
     def translateProgram(self, program: Program, include_dirs: Set[Path], defines: List[str], force_soa: bool) -> str:
