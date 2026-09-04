@@ -191,8 +191,6 @@ def parse(args: Namespace, lang: Lang) -> Application:
     include_dirs = set([Path(dir) for [dir] in args.I])
     defines = [define for [define] in args.D]
 
-    # Flang Stage-1: one op2-flang-scan --batch process for all files (unless
-    # -mp is set, which shards across workers and still benefits per-shard).
     parse_programs = getattr(lang, "parsePrograms", None)
     use_flang_batch = (
         callable(parse_programs)
@@ -206,7 +204,6 @@ def parse(args: Namespace, lang: Lang) -> Application:
                 [Path(p) for p in args.file_paths], include_dirs, defines
             )
         except fortran.FortranSyntaxError as err:
-            print()
             print(f"Syntax error in file {err.filename}:")
             print(err.message)
             exit(1)
@@ -217,7 +214,7 @@ def parse(args: Namespace, lang: Lang) -> Application:
             if args.multiprocess_parse:
                 app.programs = Pool().starmap(parse_file, f_args)
             else:
-                app.programs = [parse_file(*a) for a in f_args]
+                app.programs = [parse_file(*args) for args in f_args]
         except fortran.FortranSyntaxError as err:
             print()
             print(f"Syntax error in file {err.filename}:")
@@ -240,10 +237,7 @@ def parse_file(i, raw_path, lang, args):
 
 
 def validate(args: Namespace, lang: Lang, app: Application) -> None:
-    # Language-specific validate() implementations are responsible for any
-    # lazy fparser2 fallback they need (e.g. Fortran's Flang Stage 1 only
-    # attaches an fparser2 AST for loops it can't validate directly from
-    # Flang's own data).
+    # Run semantic checks on the application
     app.validate(lang)
 
     # Create a JSON dump
