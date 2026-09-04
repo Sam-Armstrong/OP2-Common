@@ -17,6 +17,9 @@ from store import Application, Function, Program
 
 
 def _flang_body(func: Function) -> Dict[str, Any]:
+    """
+    Return `func`'s ``flang_body`` dictionary, raise ``OpError`` if it's missing.
+    """
     body = getattr(func, "flang_body", None)
     if body is None:
         raise OpError(f"missing Flang body data for {func.name}")
@@ -24,6 +27,9 @@ def _flang_body(func: Function) -> Dict[str, Any]:
 
 
 def is_ref(expr: Dict[str, Any], name: str) -> bool:
+    """
+    Checks if `expr` is a name, part_ref, or funcref that refers to `name`.
+    """
     kind = expr.get("kind")
     if kind == "name":
         return expr.get("value") == name
@@ -33,7 +39,9 @@ def is_ref(expr: Dict[str, Any], name: str) -> bool:
 
 
 def iter_param_occurrences(expr: Dict[str, Any], name: str) -> Iterator[Dict[str, Any]]:
-    """Recursively yield every occurrence of `name` anywhere within `expr`."""
+    """
+    Recursively yield every occurrence of `name` anywhere within `expr`.
+    """
     kind = expr.get("kind")
 
     if kind == "name":
@@ -71,9 +79,9 @@ def iter_param_occurrences(expr: Dict[str, Any], name: str) -> Iterator[Dict[str
 
 
 def iter_leaf_names(expr: Dict[str, Any]) -> Iterator[str]:
-    """Yield every identifier referenced anywhere within `expr` (bare names,
-    part_ref/funcref base names - including callee names, matching
-    fparser2's `fpu.walk(ast, Name)`, which visits call-target Names too)."""
+    """
+    Yield every identifier referenced anywhere within `expr`.
+    """
     kind = expr.get("kind")
 
     if kind == "name":
@@ -99,6 +107,10 @@ def iter_leaf_names(expr: Dict[str, Any]) -> Iterator[str]:
 
 
 def iter_all_names(func: Function) -> Iterator[str]:
+    """
+    Yield every identifier referenced in `func`'s assignments, calls, and
+    local array dimension expressions.
+    """
     body = _flang_body(func)
     for assign in body["assignments"]:
         yield from iter_leaf_names(assign["lhs"])
@@ -114,9 +126,8 @@ def iter_all_names(func: Function) -> Iterator[str]:
 
 def _find_calls_for_param(func: Function, param: str, funcs_by_name: Dict[str, Function]) -> List[Tuple[Function, int]]:
     """
-    Find every (callee, callee_param_idx) pair reachable by `param` flowing
-    (as a direct/bare argument) into a call to a known function, at any
-    nesting depth within `func`'s body.
+    Find every callee reachable by `param` flowing into a call to a known function, at any
+    nesting depth within `func`'s body. Returns a list of (callee, callee_param_idx) pairs.
     """
     results: List[Tuple[Function, int]] = []
 
@@ -155,9 +166,6 @@ def _find_calls_for_param(func: Function, param: str, funcs_by_name: Dict[str, F
         if kind == "funcref":
             for arg in expr.get("args", []):
                 if is_ref(arg, param):
-                    # A bare reference to `param` (scalar, or a whole
-                    # indexed/aliased reference like `res1(1)`) passed
-                    # directly as an actual argument.
                     record(expr, True, arg)
                 visit(arg)
             return
@@ -233,10 +241,8 @@ def map_param(func: Function, param_idx: int, funcs: List[Function], op: Callabl
 
 def _is_safe_call_arg(occurrence: Dict[str, Any], body: Dict[str, Any], known_names: Set[str]) -> bool:
     """
-    Faithful port of `fortran.util.getCall`'s truthiness: True iff
-    `occurrence` is a direct/bare argument of a funcref/call, or a direct/
-    bare subscript of a part_ref, whose base name resolves to a known
-    function.
+    Returns True if `occurrence` is a direct argument of a funcref/call, or a
+    subscript of a part_ref, whose base name resolves to a known function.
     """
 
     def search(expr: Dict[str, Any]) -> bool:
@@ -284,10 +290,6 @@ def _is_safe_call_arg(occurrence: Dict[str, Any], body: Dict[str, Any], known_na
 
 
 def _linearize_increment(node: Dict[str, Any], ref_name: str, count: List[int]) -> str:
-    """Port of `fortran.validator.simplifyLevel2`: linearise an RHS subexpr
-    into a string with exactly one `x` (the tracked ref) and fresh `yN`
-    symbols standing in for everything else. Only descends through +/-;
-    anything else is checked for mere containment and treated opaquely."""
 
     def inc_sym() -> str:
         count[0] += 1
@@ -321,6 +323,10 @@ def _linearize_increment(node: Dict[str, Any], ref_name: str, count: List[int]) 
 # Individual checks (equivalent to fortran/validator.py)
 
 def checkConstRead(func: Function, const_ptrs: List[str], violations: List[str]) -> None:
+    """
+    Equivalent to fortran.validator's checkConstRead. Appends a violation
+    for each assignment whose LHS is one of `const_ptrs`.
+    """
     def msg(const_ptr: str, line: int) -> str:
         return f"In {func.name} (const {const_ptr}): {line}"
 
@@ -332,6 +338,12 @@ def checkConstRead(func: Function, const_ptrs: List[str], violations: List[str])
 
 
 def checkInc(func: Function, param_idx: int, funcs: List[Function], violations: List[str]) -> None:
+    """
+    Equivalent to fortran.validator's checkInc. Appends a violation if
+    `func.parameters[param_idx]` is written but not formed as a proper increment
+    (`x = x + delta`), or if it appears in a context that is not a known
+    function argument or array subscript.
+    """
     param = func.parameters[param_idx]
     funcs_by_name = {f.name: f for f in funcs}
     known_names = set(funcs_by_name.keys())
@@ -394,6 +406,10 @@ def checkInc(func: Function, param_idx: int, funcs: List[Function], violations: 
 
 
 def checkRead(func: Function, param_idx: int, violations: List[str]) -> None:
+    """
+    Equivalent to fortran.validator's checkRead. Appends a violation for
+    each assignment whose LHS is `func.parameters[param_idx]`.
+    """
     param = func.parameters[param_idx]
 
     def msg(line: int) -> str:
@@ -405,6 +421,11 @@ def checkRead(func: Function, param_idx: int, violations: List[str]) -> None:
 
 
 def checkRuntimeDimensionArrays(func: Function, consts: Set[str], violations: List[str]) -> None:
+    """
+    Equivalent to fortran.validator's checkRuntimeDimensionArrays. Appends
+    a violation for each locally declared array whose shape bounds refer
+    to a kernel parameter or an OP2 const.
+    """
     blacklist = set(consts) | set(func.parameters)
 
     for local in _flang_body(func).get("locals", []):
@@ -418,6 +439,11 @@ def checkRuntimeDimensionArrays(func: Function, consts: Set[str], violations: Li
 
 
 def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations: List[str]) -> None:
+    """
+    Equivalent to fortran.validator's checkSlice. Appends a violation if
+    `func.parameters[param_idx]` is used as a whole-array reference or
+    slice/section, which is incompatible with stride insertion.
+    """
     param = func.parameters[param_idx]
     known_names = {f.name for f in funcs}
 
@@ -442,8 +468,6 @@ def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations
                         if sub.get("kind") == "triplet":
                             violations.append(msg(line))
                             break
-                # Matches the original `continue`: no default violation for
-                # this occurrence itself, whether or not a slice was found.
 
             if kind == "part_ref":
                 for sub in expr.get("subscripts", []):
@@ -480,9 +504,8 @@ def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations
 
 def can_validate_with_flang(loop: OP.Loop, program: Program, app: Application) -> bool:
     """
-    Return True iff the kernel and every (transitive) dependency needed to
-    validate `loop` were parsed by Flang and carry ``flang_body`` data, so
-    ``validateLoop`` can run without ever touching an fparser2 AST.
+    Returns True if the kernel and every dependency needed to validate
+    `loop` were parsed by Flang and carry ``flang_body`` data.
     """
     kernel_entities = app.findEntities(loop.kernel, program, [])
     if len(kernel_entities) != 1 or not isinstance(kernel_entities[0], Function):
@@ -495,6 +518,13 @@ def can_validate_with_flang(loop: OP.Loop, program: Program, app: Application) -
 
 
 def validateLoop(loop: OP.Loop, program: Program, app: Application) -> None:
+    """
+    Equivalent to fortran.validator's validateLoop, walking the ``flang_body``
+    JSON instead of an fparser2 AST. Checks that `loop`'s kernel and its
+    dependencies obey OP2 access-type and related restrictions, printing
+    warnings and setting ``loop.fallback`` when an optimized kernel cannot
+    be generated.
+    """
     kernel_entities = app.findEntities(loop.kernel, program, [])
 
     if len(kernel_entities) == 0:
