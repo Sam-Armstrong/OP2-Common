@@ -39,28 +39,12 @@
 namespace fp = Fortran::parser;
 
 /**
- * @brief Tiny hand-written streaming JSON emitter.
+ * @brief Streaming JSON emitter.
  *
- * Written so we can avoid pulling a real JSON library into the link. The
- * interface is push-style: the caller drives a sequence of
- * `beginObject`/`key`/`value`/`endObject` and `beginArray`/`value`/`endArray`
- * calls and the writer takes care of placing the commas in the right spots.
- *
- * The state machine that decides whether to prefix the next token with a
- * comma is a stack of bools (`first_`), one entry per currently-open object
- * or array. The top entry says "is the next value I'm about to write the
- * first one in this container?". Every value-producing call (a leaf, or a
- * nested object/array) reads the top entry, emits the comma if needed, and
- * then sets it to false. `key` is a special case: it acts as both the
- * closing of one (key, value) pair and the opening of the next, so it
- * resets the slot back to "first" so the value that follows doesn't get a
- * stray leading comma.
- *
- * Strings are escaped per RFC 8259: the structural specials (`"`, `\`,
- * control characters, plus the usual whitespace shorthands), with anything
- * else passed through as raw bytes. We do not transcode UTF-8.
- *
- * @see BodyCollector
+ * Written to avoid needing to pull a JSON library into the link.
+ * The caller drives a sequence of `beginObject`/`key`/`value`/`endObject`
+ * and `beginArray`/`value`/`endArray` calls and the writer is responsible
+ * for correctly placing the commas.
  */
 class Json {
 public:
@@ -92,22 +76,11 @@ public:
         markWrote();
     }
 
-    /**
-     * @brief Emit "key":  Followed by exactly one value-emitting call.
-     *
-     * @param k Object key to emit.
-     * @see Json::comma
-     * @see Json::markWrote
-     */
     void key(const std::string &k)
     {
         comma();
         writeString(k);
         out_ << ":";
-        // The value paired with this key is the *first* token after the colon
-        // (so it must not have a leading comma) but it is NOT the first
-        // entry in the surrounding object. Reuse the existing stack slot to
-        // record that.
         if (!first_.empty()) {
             first_.back() = true;
         }
@@ -142,12 +115,11 @@ public:
     }
 
     /**
-     * @brief Splice in a pre-rendered JSON fragment verbatim (no quoting/escaping).
+     * @brief Splice in a pre-rendered JSON fragment.
      *
-     * Used to stitch together documents built with separate Json instances, e.g. when two output arrays need to be populated by a single interleaved tree walk (see BodyCollector).
+     * Used to stitch together documents built with separate Json instances.
      *
      * @param jsonText Pre-rendered JSON fragment spliced in without quoting.
-     * @see BodyCollector
      */
     void rawValue(const std::string &jsonText)
     {
@@ -157,7 +129,7 @@ public:
     }
 
     /**
-     * @brief Snapshot of the buffer; safe to call once the top-level object/array has been closed.
+     * @brief Snapshot of the buffer.
      *
      * @return The accumulated JSON text.
      */
@@ -169,10 +141,6 @@ public:
 private:
     /**
      * @brief If this isn't the first value in the current container, emit a comma.
-     *
-     * Either way, mark the slot as no-longer-first.
-     *
-     * @see Json::markWrote
      */
     void comma()
     {
@@ -185,11 +153,7 @@ private:
     }
 
     /**
-     * @brief Some emitters (key) need to remember they wrote something without going through `comma`.
-     *
-     * This sets the slot to "not first" without emitting anything.
-     *
-     * @see Json::comma
+     * @brief Mark as wrote (not first) without emitting anything.
      */
     void markWrote()
     {
@@ -197,9 +161,7 @@ private:
     }
 
     /**
-     * @brief RFC 8259 string escaping.
-     *
-     * We bail out to \uXXXX for any control byte we don't have a shorthand for; everything else (including non-ASCII payload bytes) is passed through unchanged.
+     * @brief String escaping, bail out to \uXXXX for any control byte there isn't a shorthand for.
      *
      * @param s String contents to escape and quote.
      * @see jsonEscape
@@ -238,16 +200,14 @@ private:
     }
 
     std::ostringstream out_;
-    std::vector<bool> first_; // depth-stack of "is the next slot the first?"
+    std::vector<bool> first_;
 };
 
 /**
- * @brief Lower-case an ASCII string.
+ * @brief Lowercase an ASCII string.
  *
- * Used everywhere we hand a Fortran identifier to JSON, since Fortran is case-insensitive but the Python side does case-sensitive comparisons.
- *
- * @param s ASCII identifier to lower-case.
- * @return `s` with ASCII letters converted to lower case.
+ * @param s ASCII identifier to lowercase.
+ * @return String with ASCII letters converted to lowercase.
  */
 static std::string toLower(std::string s)
 {
@@ -256,50 +216,39 @@ static std::string toLower(std::string s)
 }
 
 /**
- * @brief Convenience wrapper: get a CharBlock back as a std::string.
- *
- * CharBlock is a (char*, size_t) view into Flang's cooked source buffer; ToString() copies.
+ * @brief Convert CharBlock to a string.
  *
  * @param src Cooked-source character range.
- * @return A copy of the cooked-source slice as `std::string`.
+ * @return A copy of the cooked-source slice as a string.
  */
 static std::string sourceText(fp::CharBlock src)
 {
     return src.ToString();
 }
 
-// Forward declarations - emitExpr and emitActualArgs are mutually recursive.
 static void emitExpr(Json &json, const fp::Expr &e);
 static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args);
 
 /**
  * @brief Attempt to fold an integer-valued Expr to a plain int.
  *
- * Returns nullopt for anything we do not understand, in which case the caller falls through to the next emitter ("name" / "string" / ... / "raw").
- *
  * @param e Fortran parse-tree expression.
  * @return The folded integer, or nullopt if the expression is not a supported integer form.
- * @see foldLiteralConstant
- * @see parseIntText
- * @see emitExpr
  */
 static std::optional<int64_t> foldIntExpr(const fp::Expr &e);
 
 /**
  * @brief Parse the textual representation of an integer literal as it appears in Flang's parse tree (e.g. "42", "-7", "1_8").
  *
- * std::stoll handles the leading sign and digits; we deliberately ignore the trailing kind suffix.
- *
  * @param text Integer literal spelling from the parse tree (digits, optional sign, optional kind suffix).
  * @return The parsed integer, or nullopt if `text` is not an integer literal.
- * @see foldLiteralConstant
  */
 static std::optional<int64_t> parseIntText(const std::string &text)
 {
     try {
         size_t pos = 0;
         long long v = std::stoll(text, &pos);
-        // Accept any trailing kind suffix like 4_ik, 1_8, 3_kind
+        // accept any trailing kind suffix like 4_ik, 1_8, 3_kind
         return static_cast<int64_t>(v);
     } catch (...) {
         return std::nullopt;
@@ -309,12 +258,8 @@ static std::optional<int64_t> parseIntText(const std::string &text)
 /**
  * @brief Pull an integer out of a LiteralConstant variant.
  *
- * We only handle integer literals here; reals/booleans/etc. fall through to nullopt and the caller continues its dispatch.
- *
  * @param lit Parse-tree literal-constant node.
  * @return The integer value of an integer/signed-integer literal, otherwise nullopt.
- * @see parseIntText
- * @see foldIntExpr
  */
 static std::optional<int64_t> foldLiteralConstant(const fp::LiteralConstant &lit)
 {
@@ -335,20 +280,14 @@ static std::optional<int64_t> foldLiteralConstant(const fp::LiteralConstant &lit
 }
 
 /**
- * @brief Tiny constant folder for integer-valued Exprs.
+ * @brief Constant folder for integer-valued Exprs.
  *
- * We only support enough operators to recognise the kinds of expressions
- * real OP2 source code uses for op_par_loop arities, op_decl_const sizes,
- * op_arg_dat indices and similar parameters: literals, parenthesised
- * subexpressions, unary +/-, and binary +, -, *, /, **. Anything more
- * complicated yields nullopt and the caller emits the argument as "raw"
- * text so the Python side can decide what to do.
+ * Only supports enough operators to recognise the kinds of expressions
+ * real OP2 source code uses for things like op_decl_const sizes,
+ * op_arg_dat indices and similar.
  *
  * @param e Fortran parse-tree expression.
  * @return The folded integer, or nullopt if the expression is not a supported integer form.
- * @see foldLiteralConstant
- * @see parseIntText
- * @see emitExpr
  */
 static std::optional<int64_t> foldIntExpr(const fp::Expr &e)
 {
@@ -401,16 +340,13 @@ static std::optional<int64_t> foldIntExpr(const fp::Expr &e)
 }
 
 /**
- * @brief Pull a bare identifier out of a Designator (e.g. "p_q", "OP_ID", "OP_READ").
+ * @brief Pull a bare identifier out of a Designator (such as "p_q", "OP_ID", "OP_READ").
  *
- * Designator is a discriminated union (DataRef | Substring), and DataRef is
- * itself a union of (Name | StructureComponent | ArrayElement | ...). We only
- * succeed when the leaf is a single Name; anything more elaborate (e.g.
- * `mod%name`) is reported as nullopt so the caller falls through to "raw".
+ * Only succeeds when the leaf is a single Name; anything more elaborate is reported
+ * as nullopt so the caller falls through to "raw".
  *
  * @param d Parse-tree designator.
- * @return The lower-cased name, or nullopt if the designator is not a bare Name.
- * @see emitExpr
+ * @return The lowercased name, or nullopt if the designator is not a single Name.
  */
 static std::optional<std::string> designatorToName(const fp::Designator &d)
 {
@@ -435,12 +371,10 @@ static std::optional<std::string> designatorToName(const fp::Designator &d)
 }
 
 /**
- * @brief A view onto a "looks like a call" expression: just the callee identifier and a borrowed pointer into the parse tree's argument list.
- *
- * We hand both straight to emitActualArgs so we never need to copy the args.
+ * @brief View onto an expression that looks like a call, with the callee identifier and a
+ * borrowed pointer into the parse tree's argument list.
  *
  * @see exprAsCall
- * @see emitActualArgs
  */
 struct CallView {
     std::string name;
@@ -450,17 +384,8 @@ struct CallView {
 /**
  * @brief Try to extract (callee-name, args) out of an Expr that looks like a call.
  *
- * At parse time `op_arg_dat(...)` shows up as a FunctionReference because
- * Flang's parser doesn't yet know that `op_arg_dat` is a derived-type
- * constructor (no semantics have run). The Python side knows what each
- * helper means, so we just emit the call shape and let it interpret. We
- * also leave a slot for the keyword-argument variant (StructureConstructor)
- * even though OP2 source today doesn't use it.
- *
  * @param e Fortran parse-tree expression.
  * @return Callee name and argument list, or nullopt if `e` is not a call-shaped expression.
- * @see CallView
- * @see emitActualArgs
  */
 static std::optional<CallView> exprAsCall(const fp::Expr &e)
 {
@@ -468,7 +393,6 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e)
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::FunctionReference>>) {
             const fp::FunctionReference &fr = alt.value();
-            // FunctionReference wraps a Call = std::tuple<ProcedureDesignator, std::list<ActualArgSpec>>
             const fp::Call &call = fr.v;
             const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(call.t);
             const auto &args = std::get<std::list<fp::ActualArgSpec>>(call.t);
@@ -482,9 +406,6 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e)
             },
                 pd.u);
         } else if constexpr (std::is_same_v<T, fp::StructureConstructor>) {
-            // Keyword-arg form; Flang parses it directly as a StructureConstructor.
-            // We do not see this for the plain-positional op_arg_dat calls, but
-            // we leave a slot for it.
             return std::nullopt;
         } else {
             return std::nullopt;
@@ -496,20 +417,12 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e)
 /**
  * @brief Emit one expression as a JSON object.
  *
- * Dispatch order matters: we try the most specific shape first (integer
- * folding, then character literal, then bare identifier, then nested call)
- * and only fall back to the generic "raw" source-text emission when none
- * of the structured paths match. Earlier successful matches short-circuit.
- *
  * @param json JSON writer to append into.
  * @param e Fortran parse-tree expression.
- * @see foldIntExpr
- * @see exprAsCall
- * @see emitActualArgs
  */
 static void emitExpr(Json &json, const fp::Expr &e)
 {
-    // 1. Integer literal (possibly signed / parenthesised / simple arithmetic).
+    // 1. Integer literal
     if (auto v = foldIntExpr(e)) {
         json.beginObject();
         json.key("kind");
@@ -520,21 +433,11 @@ static void emitExpr(Json &json, const fp::Expr &e)
         return;
     }
 
-    // 2. Character literal, e.g. "real(8)".
-    //
-    // The parse-tree layout for character literals in an expression varies
-    // between releases:
-    //   - older Flang: Expr::u has `common::Indirection<CharLiteralConstant>`
-    //     as its own arm.
-    //   - newer Flang (LLVM 19+): Expr::u has `LiteralConstant`, whose own
-    //     `u` variant holds `CharLiteralConstant` (and the other literal
-    //     kinds).
-    // We handle both shapes.
+    // 2. Character literal
     auto extractCharLiteral = [](const fp::Expr &expr) -> std::optional<std::string> {
         return std::visit([](const auto &alt) -> std::optional<std::string> {
             using T = std::decay_t<decltype(alt)>;
             if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::CharLiteralConstant>>) {
-                // CharLiteralConstant::t = std::tuple<std::optional<KindParam>, std::string>
                 return std::get<std::string>(alt.value().t);
             } else if constexpr (std::is_same_v<T, fp::LiteralConstant>) {
                 return std::visit([](const auto &inner) -> std::optional<std::string> {
@@ -562,7 +465,7 @@ static void emitExpr(Json &json, const fp::Expr &e)
         return;
     }
 
-    // 3. Bare identifier (e.g. OP_READ, OP_ID, p_q).
+    // 3. Bare identifier (such as OP_READ, OP_ID, p_q)
     bool emitted = std::visit([&](const auto &alt) -> bool {
         using T = std::decay_t<decltype(alt)>;
         if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
@@ -571,8 +474,8 @@ static void emitExpr(Json &json, const fp::Expr &e)
                 json.key("kind");
                 json.stringValue("name");
                 json.key("value");
-                json.stringValue(*name);
-                json.endObject();
+                json.stringValue(*name)
+                    json.endObject();
                 return true;
             }
         }
@@ -581,7 +484,7 @@ static void emitExpr(Json &json, const fp::Expr &e)
         e.u);
     if (emitted) return;
 
-    // 4. Nested call, e.g. op_arg_dat(...), op_arg_gbl(...), op_arg_idx(...).
+    // 4. Nested call (such as op_arg_dat(...), op_arg_gbl(...), op_arg_idx(...))
     if (auto call = exprAsCall(e)) {
         json.beginObject();
         json.key("kind");
@@ -595,7 +498,7 @@ static void emitExpr(Json &json, const fp::Expr &e)
     }
 
     // 5. Fallback: emit the raw source text so the Python side can either
-    // parse it or flag it as unsupported.
+    //              parse it or flag it as unsupported
     json.beginObject();
     json.key("kind");
     json.stringValue("raw");
@@ -607,23 +510,14 @@ static void emitExpr(Json &json, const fp::Expr &e)
 /**
  * @brief Emit a parenthesised argument list as a JSON array of expression objects.
  *
- * In the Fortran 2018 grammar an actual argument is either an expression,
- * an alternate-return spec, a procedure name, or a procedure component
- * reference. OP2 calls use plain expressions exclusively, so we recognise
- * the Indirection<Expr> arm and emit a "raw" placeholder for everything
- * else, which gives the Python side something to flag.
- *
  * @param json JSON writer to append into.
  * @param args Actual-argument list from the call.
- * @see emitExpr
  */
 static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args)
 {
     json.beginArray();
     for (const fp::ActualArgSpec &spec : args) {
         // ActualArgSpec = std::tuple<std::optional<Keyword>, ActualArg>
-        // We currently ignore the optional keyword name; positional matching
-        // is what every OP2 helper expects.
         const fp::ActualArg &aa = std::get<fp::ActualArg>(spec.t);
         // ActualArg variant: Indirection<Expr>, AltReturnSpec, ActualArgProcedureComponentRef, ProcedureName
         bool handled = std::visit([&](const auto &alt) -> bool {
@@ -648,32 +542,17 @@ static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args)
 }
 
 /**
- * @brief DependsCollector: per-subprogram dependency walker.
+ * @brief Per-subprogram dependency walker.
  *
- * Walks one subprogram subtree and gathers the lower-cased names of
- * everything that *looks* like a call to another subroutine or function.
- *
- * We intentionally collect a superset and let Python filter:
- *
- *   * `CallStmt` callees are unambiguous subroutine calls.
- *   * `FunctionReference` callees may be real function calls *or* array
- *     indexing - the parser cannot tell them apart without semantic
- *     analysis (no symbol table at this stage). The Python side filters
- *     these against the known entity list before storing them in
- *     `Function.depends`, which mirrors fparser2's existing Part_Ref
- *     post-processing in `parseFunctionDependencies`.
- *
- * The struct follows Flang's parse-tree-visitor convention: each Pre
- * returns true to continue walking, the templated fallbacks make sure
- * every other node type is silently traversed, and Post() is a no-op.
- *
- * @see Scanner
+ * Walks one subprogram subtree and gathers the lowercased names of
+ * everything that looks like a call to another subroutine or function.
+ * A superset is collected, so Python can filter the results.
  */
 struct DependsCollector {
     std::set<std::string> &out;
 
     /**
-     * @brief Direct subroutine call: `call foo(...)`.
+     * @brief Direct subroutine call.
      *
      * @param cs Parse-tree CALL statement.
      * @return Always `true`, so Flang continues walking the subtree.
@@ -693,11 +572,11 @@ struct DependsCollector {
     }
 
     /**
-     * @brief Function-style reference inside an expression: `x = foo(i, j)`.
+     * @brief Function-style reference inside an expression.
      *
      * May be a real function call or array indexing; Python disambiguates.
      *
-     * @param fr Parse-tree function reference (may also be array indexing).
+     * @param fr Parse-tree function reference (or could be array indexing).
      * @return Always `true`, so Flang continues walking the subtree.
      */
     bool Pre(const fp::FunctionReference &fr)
@@ -714,8 +593,7 @@ struct DependsCollector {
         return true;
     }
 
-    // No-op fallbacks for every other parse-tree node type. Required by
-    // Flang's Walk() so that the visitor matches every node it visits.
+    // no-op fallbacks for every other parse-tree node type
     template <typename T>
     bool Pre(const T &)
     {
@@ -729,16 +607,10 @@ struct DependsCollector {
 static void emitBodyExpr(Json &json, const fp::Expr &e);
 
 /**
- * @brief Render a KindParam (R709: `_kind`, e.g. the `8`/`RK`/`IK4` in `1_RK`) as its raw source text.
- *
- * Kind selectors used in OP2 kernels are always a bare digit string or a bare
- * uppercase name, so callers can decide which one they got with a simple
- * `isdigit()`-style check; we deliberately don't try to fold the digit case
- * to an int here.
+ * @brief Render a KindParam as its raw source text.
  *
  * @param kp Kind parameter (`_kind` on a literal or type spec).
  * @return Raw source spelling of the kind selector.
- * @see emitLiteralConstant
  */
 static std::string kindParamToString(const fp::KindParam &kp)
 {
@@ -755,12 +627,10 @@ static std::string kindParamToString(const fp::KindParam &kp)
 }
 
 /**
- * @brief Emit one of the four literal-constant leaf shapes (int/real/logical/char), or an "unsupported" leaf for the handful of literal kinds OP2 kernels never use (Hollerith, BOZ, unsigned, complex).
+ * @brief Emit one of the four literal-constant leaf shapes (int/real/logical/char), or "unsupported".
  *
  * @param json JSON writer to append into.
  * @param lit Parse-tree literal-constant node.
- * @see kindParamToString
- * @see emitBodyExpr
  */
 static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit)
 {
@@ -824,13 +694,10 @@ static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit)
 }
 
 /**
- * @brief A SectionSubscript is either a plain (scalar- or vector-valued) IntExpr, or a SubscriptTriplet.
- *
- * Only the latter is structurally distinguishable from a plain index at parse time (colon syntax isn't valid anywhere else), which is exactly the "is this a slice?" signal the validator needs.
+ * @brief Emit one array subscript as JSON, either an IntExpr, or a SubscriptTriplet.
  *
  * @param json JSON writer to append into.
- * @param sub Parse-tree node being visited.
- * @see emitBodyExpr
+ * @param sub Parse-tree section-subscript (scalar index or triplet).
  */
 static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub)
 {
@@ -862,16 +729,14 @@ static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub)
 }
 
 /**
- * @brief Emit a Designator (R901: object-name | array-element | ... | substring).
+ * @brief Emit a Designator.
  *
- * We only structurally decompose the two shapes the validator cares about
- * (plain Name, and array-element via a plain-Name base); everything else
- * (structure components, coindexed objects, substrings) becomes "raw".
+ * Only structurally decomposes the two shapes the validator cares about:
+ * (plain Name, and array-element via a plain-Name base).
+ * Everything else becomes "raw".
  *
  * @param json JSON writer to append into.
  * @param d Parse-tree designator.
- * @see emitBodyExpr
- * @see emitBodySubscript
  */
 static void emitDesignator(Json &json, const fp::Designator &d)
 {
@@ -929,11 +794,10 @@ static void emitDesignator(Json &json, const fp::Designator &d)
 }
 
 /**
- * @brief Emit a FunctionReference (ambiguous array-element-or-call, RHS-only).
+ * @brief Emit a FunctionReference.
  *
  * @param json JSON writer to append into.
  * @param fr Parse-tree function reference (may also be array indexing).
- * @see emitBodyExpr
  */
 static void emitFuncRef(Json &json, const fp::FunctionReference &fr)
 {
@@ -993,14 +857,12 @@ static void emitFuncRef(Json &json, const fp::FunctionReference &fr)
 }
 
 /**
- * @brief Emit a Variable (R902: designator | function-reference).
+ * @brief Emit a Variable.
  *
- * Used for the LHS of an AssignmentStmt, which - like any parenthesised reference - can in principle parse as either shape until semantics run.
+ * Used for the LHS of an AssignmentStmt.
  *
  * @param json JSON writer to append into.
  * @param v Parse-tree variable (designator or function-reference).
- * @see emitDesignator
- * @see emitFuncRef
  */
 static void emitVariable(Json &json, const fp::Variable &v)
 {
@@ -1062,12 +924,6 @@ static void emitBodyExpr(Json &json, const fp::Expr &e)
                              std::is_same_v<T, fp::Expr::GE> || std::is_same_v<T, fp::Expr::GT> ||
                              std::is_same_v<T, fp::Expr::AND> || std::is_same_v<T, fp::Expr::OR> ||
                              std::is_same_v<T, fp::Expr::EQV> || std::is_same_v<T, fp::Expr::NEQV>) {
-            // All of Fortran's binary intrinsic operators (arithmetic,
-            // relational, logical, concatenation) share the same
-            // IntrinsicBinary tuple<Indirection<Expr>, Indirection<Expr>>
-            // shape; only the spelling of "op" differs. We emit the C++
-            // spelling directly rather than the Fortran token, since the
-            // only consumer is Fortran to C++ code generation.
             const char *op = "+";
             if constexpr (std::is_same_v<T, fp::Expr::Subtract>) op = "-";
             else if constexpr (std::is_same_v<T, fp::Expr::Multiply>) op = "*";
@@ -1117,11 +973,9 @@ static void emitBodyExpr(Json &json, const fp::Expr &e)
 
     if (emitted) return;
 
-    // Anything else we don't decompose (array/structure constructors,
-    // %LOC, defined operators, complex literals, substring inquiries, ...)
-    // becomes an opaque "unsupported" leaf carrying the source text, so the
-    // Python side can raise a clear error rather than silently misreading
-    // it as a value.
+    // anything else that isn't decomposed becomes an opaque "unsupported"
+    // leaf carrying the source text, so the Python side can raise a clear
+    // error rather than silently misreading it as a value
     json.beginObject();
     json.key("kind");
     json.stringValue("unsupported");
@@ -1132,16 +986,11 @@ static void emitBodyExpr(Json &json, const fp::Expr &e)
     json.endObject();
 }
 
-// NameCollector / LocalsCollector: local array declaration walker.
-//
-// The validation step "runtime dimension local arrays" check flags local arrays whose
-// declared bounds reference a kernel parameter or an OP2 const (both
-// runtime values - a red flag for stack-allocated arrays, especially on a
-// GPU). For every locally-declared array we collect the lower-cased name of
-// every identifier referenced anywhere in its shape-spec bound expressions;
-// Python cross-references that against the const/parameter list.
+/**
+ * @brief Parse-tree walker that appends every Name it visits, lowercased.
+ */
 struct NameCollector {
-    std::vector<std::string> &out;
+    std::vector<std::string> &out; // lowercased names, in visit order
     bool Pre(const fp::Name &n)
     {
         out.push_back(toLower(n.ToString()));
@@ -1157,6 +1006,9 @@ struct NameCollector {
     {}
 };
 
+/**
+ * @brief Parse-tree walker that adds every local array declaration into a JSON as {"name", "dims"}. 
+ */
 struct LocalsCollector {
     Json &json; // emits directly into an open array of {"name", "dims"} objects
 
@@ -1179,14 +1031,6 @@ struct LocalsCollector {
         return names;
     }
 
-    /**
-     * @brief Pre(TypeDeclarationStmt): `TYPE, attrs :: entity-decl-list`.
-     *
-     * An entity's array-ness/shape can come either from its own `name(spec)` suffix or from a shared `dimension(spec)` attribute applying to the whole entity-decl-list; we check both, matching fparser2's fallback.
-     *
-     * @param decl Parse-tree type-declaration statement.
-     * @return Always `true`, so Flang continues walking the subtree.
-     */
     bool Pre(const fp::TypeDeclarationStmt &decl)
     {
         const auto &attrs = std::get<std::list<fp::AttrSpec>>(decl.t);
@@ -1225,23 +1069,10 @@ struct LocalsCollector {
 };
 
 /**
- * @brief BodyCollector: per-subprogram assignment/call walker
+ * @brief Per-subprogram assignment/call walker.
  *
  * Walks one subprogram's Execution_Part and records every assignment
- * statement (lhs/rhs expr trees) and every direct subroutine call (`call
- * foo(...)`, with its own arg expr trees). Like fparser2's flat `fpu.walk`,
- * this deliberately ignores control-flow nesting (if/do/...) - none of the
- * validation checks care which branch/loop a statement lives in, only that it
- * exists somewhere in the body.
- *
- * Assignments and calls are written into two separate Json instances
- * (rather than the shared per-file `json`) because a single tree walk
- * interleaves the two statement kinds in source order, but the JSON
- * contract wants them as two separate arrays; see Json::rawValue.
- *
- * @see Json::rawValue
- * @see emitVariable
- * @see emitBodyExpr
+ * statement (lhs/rhs expr trees) and every direct subroutine call.
  */
 struct BodyCollector {
     Json &jsonAssignments; // open array of {"line", "lhs", "rhs"}
@@ -1340,16 +1171,7 @@ struct BodyCollector {
     {}
 };
 
-// Parse-tree "unwrap" helpers.
-//
-// Flang wraps expressions in a chain of single-field "constraint" templates
-// (Scalar<>, Integer<>, Logical<>, Constant<>, common::Indirection<>) that
-// exist purely to document a grammar constraint (e.g. "this must be a
-// scalar integer expression") and carry no data of their own beyond a
-// `.thing` (or, for Indirection, a `.value()`) member wrapping the next
-// layer. These helpers thread through one specific chain each so the
-// declaration/statement emitters below can write `unwrapFoo(x)` instead of
-// repeating `x.thing.thing.thing.value()` everywhere.
+// Parse-tree unwrap helpers
 static const fp::Expr &unwrapScalarIntExpr(const fp::ScalarIntExpr &e)
 {
     return e.thing.thing.value();
@@ -1376,14 +1198,10 @@ static const fp::Expr &unwrapSpecificationExpr(const fp::SpecificationExpr &e)
 }
 
 /**
- * @brief R709 kind-param, as it appears on an intrinsic type spec (`REAL(8)`, `INTEGER(kind=IK)`, ...).
- *
- * Returns nullopt for the (rare) `KIND=*` assumed-size-character-style StarSize form.
+ * @brief Render a KindSelector as its raw source text, or nullopt if absent or not a ScalarIntConstantExpr.
  *
  * @param ks Optional kind selector on an intrinsic type spec.
  * @return Kind-selector source text, or nullopt if absent or of an unsupported form.
- * @see kindParamToString
- * @see emitIntrinsicType
  */
 static std::optional<std::string> kindSelectorText(const std::optional<fp::KindSelector> &ks)
 {
@@ -1395,11 +1213,10 @@ static std::optional<std::string> kindSelectorText(const std::optional<fp::KindS
 }
 
 /**
- * @brief R721 char-selector's length: either a plain expression (`(5)`, `(len=n)`) or the legacy `*5` numeric form; emits an expr-shaped node either way.
+ * @brief Emit a TypeParamValue as a scalar int expression, or "unsupported" for Star/Deferred.
  *
  * @param json JSON writer to append into.
  * @param tpv Character length type-param-value.
- * @see emitBodyExpr
  */
 static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv)
 {
@@ -1407,8 +1224,6 @@ static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv)
         emitBodyExpr(json, unwrapScalarIntExpr(*sie));
         return;
     }
-    // Star (assumed length, dummy args only) or Deferred (allocatable/
-    // pointer character) - neither is legal for an OP2 kernel local/param.
     json.beginObject();
     json.key("kind");
     json.stringValue("unsupported");
@@ -1417,6 +1232,12 @@ static void emitTypeParamValue(Json &json, const fp::TypeParamValue &tpv)
     json.endObject();
 }
 
+/**
+ * @brief Emit a CharLength; a TypeParamValue or integer literal.
+ *
+ * @param json JSON writer to append into.
+ * @param cl Parse-tree character length (`*n` or a type-param-value).
+ */
 static void emitCharLength(Json &json, const fp::CharLength &cl)
 {
     if (const auto *tpv = std::get_if<fp::TypeParamValue>(&cl.u)) {
@@ -1434,11 +1255,10 @@ static void emitCharLength(Json &json, const fp::CharLength &cl)
 }
 
 /**
- * @brief R721 char-selector, in full: either a bare length-selector or the `(LEN=..., KIND=...)` form (whose kind we ignore
+ * @brief Emit the length part of an optional CharSelector.
  *
  * @param json JSON writer to append into.
  * @param cs Optional character selector (`*n` or `(LEN=..., KIND=...)`).
- * @see emitTypeParamValue
  */
 static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs)
 {
@@ -1460,7 +1280,6 @@ static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs)
             },
                 alt.u);
         } else {
-            // LengthAndKind: tuple<optional<TypeParamValue>, ScalarIntConstantExpr>.
             const auto &lengthOpt = std::get<0>(alt.t);
             if (lengthOpt) emitTypeParamValue(json, *lengthOpt);
             else json.nullValue();
@@ -1470,12 +1289,10 @@ static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs)
 }
 
 /**
- * @brief R704 intrinsic-type-spec -> INTEGER|REAL|DOUBLE PRECISION|COMPLEX| CHARACTER|LOGICAL [selector]
+ * @brief Emit an intrinsic type spec as {"kind": "intrinsic", "base", "kind_text", "charlen"}, or "unsupported".
  *
  * @param json JSON writer to append into.
  * @param its Intrinsic type spec.
- * @see kindSelectorText
- * @see emitCharLen
  */
 static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its)
 {
@@ -1507,8 +1324,6 @@ static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its)
             json.key("charlen");
             emitCharLen(json, alt.v);
         } else {
-            // UnsignedTypeSpec, DoublePrecision, Complex, DoubleComplex -
-            // none of these appear in real OP2 kernels.
             json.key("kind");
             json.stringValue("unsupported");
         }
@@ -1518,11 +1333,10 @@ static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its)
 }
 
 /**
- * @brief R801 declaration-type-spec -> intrinsic-type-spec | TYPE(...) | CLASS(...) | ...
+ * @brief Emit an DeclarationTypeSpec.
  *
  * @param json JSON writer to append into.
  * @param dts Declaration type spec.
- * @see emitIntrinsicType
  */
 static void emitDeclType(Json &json, const fp::DeclarationTypeSpec &dts)
 {
@@ -1537,11 +1351,10 @@ static void emitDeclType(Json &json, const fp::DeclarationTypeSpec &dts)
 }
 
 /**
- * @brief R816/R820 array-spec, restricted to the explicit-shape-spec-list case (the only one that makes sense for a kernel parameter/local).
+ * @brief Emit an explicit-shape ArraySpec as {"kind": "explicit", "shape": [{lb, ub}, ...]}, or "unsupported".
  *
  * @param json JSON writer to append into.
  * @param spec Array spec from a type-decl attribute or entity suffix.
- * @see emitBodyExpr
  */
 static void emitArraySpec(Json &json, const fp::ArraySpec &spec)
 {
@@ -1576,11 +1389,10 @@ static void emitArraySpec(Json &json, const fp::ArraySpec &spec)
 }
 
 /**
- * @brief An entity's own `= value` initializer (only meaningful when the enclosing type-decl is PARAMETER; translateSpecificationPart in fortran/flang_kernels_c.py errors out if a non-constant-expr initialization shows up on a PARAMETER entity).
+ * @brief Emit an entity initializer as a constant expression.
  *
  * @param json JSON writer to append into.
  * @param init Optional entity initializer.
- * @see emitBodyExpr
  */
 static void emitInitialization(Json &json, const std::optional<fp::Initialization> &init)
 {
@@ -1592,8 +1404,7 @@ static void emitInitialization(Json &json, const std::optional<fp::Initializatio
         emitBodyExpr(json, unwrapConstantExpr(*ce));
         return;
     }
-    // NullInit, InitialDataTarget, or the legacy `/values/` DATA-like form -
-    // none of these are legal on a PARAMETER entity anyway.
+
     json.beginObject();
     json.key("kind");
     json.stringValue("unsupported");
@@ -1611,12 +1422,10 @@ static bool hasParameterAttr(const std::list<fp::AttrSpec> &attrs)
 }
 
 /**
- * @brief A DataStmtConstant (R841) is like a LiteralConstant but also allows the signed-literal forms (used only inside DATA statements and complex literal real/imaginary parts) and a bare named-constant reference.
+ * @brief Emit a DATA-statement constant.
  *
  * @param json JSON writer to append into.
  * @param dc DATA-statement constant.
- * @see emitLiteralConstant
- * @see emitDesignator
  */
 static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc)
 {
@@ -1674,14 +1483,10 @@ static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc)
 }
 
 /**
- * @brief R837/R838 data-stmt -> DATA data-stmt-set [[,] data-stmt-set]...
- *
- * data-stmt-set -> data-stmt-object-list / data-stmt-value-list /
+ * @brief Emit a DATA statement as {"kind": "data_stmt", "sets": [{objects, values}, ...]}.
  *
  * @param json JSON writer to append into.
  * @param dstmt DATA statement.
- * @see emitDataStmtConstant
- * @see emitVariable
  */
 static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt)
 {
@@ -1739,10 +1544,7 @@ static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt)
 }
 
 /**
- * @brief DeclCollector: walks one subprogram's Specification_Part (via fp::Walk, so it doesn't matter whether a given statement landed in the grammar's Implicit_Part or its Declaration_Construct list - both are visited in source order) and appends one JSON node per declaration construct it understands into the open `decls` array. Anything it doesn't recognise (USE, IMPLICIT, EXTERNAL, ...) is simply never visited by any of the Pre() overloads below and so contributes nothing, which is exactly the "silently skip" behaviour the fparser2 path needs (see removeExternals/translateSpecificationPart).
- *
- * @see emitDeclType
- * @see emitArraySpec
+ * @brief Per-subprogram specification-part walker that emits type_decl, parameter_stmt, and data_stmt objects.
  */
 struct DeclCollector {
     Json &json;
@@ -1849,13 +1651,11 @@ static std::pair<int, int> resolveLineColStmt(const fp::AllCookedSources &cooked
 }
 
 /**
- * @brief R1521 call-stmt, shared between statement-tree and (formerly) BodyCollector use; unlike BodyCollector's copy this one is the canonical statement-tree shape ("call" as a top-level statement kind, not nested under "kind": "call" inside an object with a separate "line").
+ * @brief Emit a CALL statement as {"kind": "call", "line", "name", "args"}, or "unsupported" if the callee isn't a plain Name.
  *
  * @param json JSON writer to append into.
  * @param call Parse-tree CALL statement.
  * @param cooked Flang cooked-source map used to recover original line/column.
- * @see emitBodyExpr
- * @see resolveLineColStmt
  */
 static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::AllCookedSources &cooked)
 {
@@ -1922,16 +1722,11 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
 }
 
 /**
- * @brief R515 action-stmt.
- *
- * Covers every statement kind that can appear either as its own line in a Block, or as the single trailing statement of a single-line IF.
+ * @brief Emit an action statement (assign/call/continue/if_stmt/return/stop/write), or "unsupported".
  *
  * @param json JSON writer to append into.
  * @param a Action statement.
  * @param cooked Flang cooked-source map used to recover original line/column.
- * @see emitCallStmtNode
- * @see emitVariable
- * @see emitBodyExpr
  */
 static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCookedSources &cooked)
 {
@@ -2013,15 +1808,13 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
 }
 
 /**
- * @brief R1134 if-construct -> if-then-stmt block [else-if-stmt block]...
- *
- * [else-stmt block] end-if-stmt
+ * @brief Emit an IF construct as {"kind": "if_construct", "branches": [{cond, body}, ...]}.
+ * 
+ * `else` has cond=null.
  *
  * @param json JSON writer to append into.
  * @param ifc IF construct.
  * @param cooked Flang cooked-source map used to recover original line/column.
- * @see emitBlock
- * @see emitBodyExpr
  */
 static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::AllCookedSources &cooked)
 {
@@ -2071,13 +1864,13 @@ static void emitIfConstruct(Json &json, const fp::IfConstruct &ifc, const fp::Al
 }
 
 /**
- * @brief R1119 do-construct -> nonlabel-do-stmt block end-do-stmt (labelled label-do-stmt loops are deliberately left unsupported, same as fortran/translator/kernels_c.py's `ctx.error("Unsupported labelled do construct")`).
+ * @brief Emit a DO construct as counted (`do i = lb, ub[, step]`) or while.
+ * 
+ * `DO CONCURRENT` becomes "unsupported".
  *
  * @param json JSON writer to append into.
  * @param dc DO construct.
  * @param cooked Flang cooked-source map used to recover original line/column.
- * @see emitBlock
- * @see emitBodyExpr
  */
 static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::AllCookedSources &cooked)
 {
@@ -2113,7 +1906,7 @@ static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::All
                 emitBodyExpr(json, unwrapScalarLogicalExpr(alt));
                 return true;
             }
-            return false; // Concurrent (DO CONCURRENT)
+            return false;
         },
             loopControlOpt->u);
     }
@@ -2129,27 +1922,20 @@ static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::All
 }
 
 /**
- * @brief R510 execution-part-construct -> executable-construct | format-stmt | entry-stmt | data-stmt | namelist-stmt
+ * @brief Emit one execution-part construct; an executable construct, DATA statement, or "unsupported".
  *
  * @param json JSON writer to append into.
  * @param epc Execution-part construct.
  * @param cooked Flang cooked-source map used to recover original line/column.
- * @see emitExecutableConstruct
- * @see emitDataStmtNode
  */
 static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstruct &epc, const fp::AllCookedSources &cooked);
 
 /**
- * @brief R514 executable-construct -> action-stmt | ...
- *
- * | do-construct | if-construct | ...
+ * @brief Emit an executable construct (action stmt, IF construct, or DO construct), or "unsupported".
  *
  * @param json JSON writer to append into.
  * @param ec Executable construct.
  * @param cooked Flang cooked-source map used to recover original line/column.
- * @see emitActionStmt
- * @see emitIfConstruct
- * @see emitDoConstruct
  */
 static void emitExecutableConstruct(Json &json, const fp::ExecutableConstruct &ec, const fp::AllCookedSources &cooked)
 {
@@ -2204,6 +1990,13 @@ static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstr
     }
 }
 
+/**
+ * @brief Emit a Block as a JSON array of execution-part constructs.
+ *
+ * @param json JSON writer to append into.
+ * @param block Execution-part block (list of constructs).
+ * @param cooked Flang cooked-source map used to recover original line/column.
+ */
 static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked)
 {
     json.beginArray();
@@ -2212,19 +2005,19 @@ static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSou
 }
 
 /**
- * @brief Scanner: top-level parse-tree visitor.
+ * @brief Top-level parse-tree visitor.
  *
- * One Scanner instance is created per file and handed to Flang's Walk().
- * Walk() invokes the appropriate Pre()/Post() overload for every parse-tree
+ * One Scanner instance is created per file and handed to Flang's Walk(),
+ * which invokes the appropriate Pre()/Post() overload for every parse-tree
  * node it visits; the templated fallbacks at the bottom of the struct make
  * sure unrecognised node types are silently traversed.
  *
  * Each successful Pre() emits zero or one JSON event into the open `events`
- * array (see main()). The walk continues into the subtree (returning true)
- * in every case so that, for example, `op_par_loop` calls inside a
- * subroutine body are still discovered.
+ * array. The walk continues into the subtree (returning true) in every case
+ * so that, for example, `op_par_loop` calls inside a subroutine body are
+ * still discovered.
  *
- * The events emitted here are:
+ * The events emitted are:
  *
  *   * Whenever a CallStmt callee matches `op_par_loop_<N>` -> "op_par_loop_N"
  *     event with its full argument tree.
@@ -2248,27 +2041,18 @@ struct Scanner {
     const fp::AllCookedSources &cooked; // for mapping CharBlocks -> line/col
 
     /**
-     * @brief Pre(CallStmt): triggered for every `call ...(...)` statement.
-     *
-     * We only care about two callee identifiers; everything else is ignored and the walk continues (so we still find op_par_loop calls deeper in the tree).
+     * @brief Triggered for every `call ...(...)` statement.
      *
      * @param call Parse-tree CALL statement.
      * @return Always `true`, so Flang continues walking the subtree.
      */
     bool Pre(const fp::CallStmt &call)
     {
-        // CallStmt's shape has drifted across LLVM releases:
-        //   LLVM ~17: WRAPPER_CLASS_BOILERPLATE(CallStmt, Call) -> call.v
-        //   LLVM ~18: struct with `Call call; optional<Chevrons> chevrons;`
-        //   LLVM ~19+: TUPLE_CLASS_BOILERPLATE with
-        //              std::tuple<Call, std::optional<Chevrons>> t
-        // This code targets the LLVM 19+ layout (including current main).
         const fp::Call &c = std::get<fp::Call>(call.t);
         const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(c.t);
         const auto &actualArgs = std::get<std::list<fp::ActualArgSpec>>(c.t);
 
-        // ProcedureDesignator can be Name | ProcComponentRef | ProcedureName.
-        // We only emit events for plain-Name callees.
+        // events only emitted for plain-Name callees
         std::string name;
         fp::CharBlock nameSrc;
         bool gotName = std::visit([&](const auto &alt) -> bool {
@@ -2285,7 +2069,6 @@ struct Scanner {
 
         if (!gotName) return true;
 
-        // Filter for the callees we actually care about.
         static const std::regex parLoopRe{"^op_par_loop_[0-9]+$"};
         const bool isParLoop = std::regex_match(name, parLoopRe);
         const bool isDeclConst = (name == "op_decl_const");
@@ -2302,12 +2085,10 @@ struct Scanner {
     }
 
     /**
-     * @brief Map a CharBlock from the cooked source stream back to a (line, column) in the *original* source file via Flang's provenance machinery.
-     *
-     * Returns (0, 0) on failure - we never want to throw out of a visitor.
+     * @brief Map a CharBlock from the cooked source stream back to a (line, column) in the original source file.
      *
      * @param src Cooked-source character range.
-     * @return `(line, column)` in the original source, or `(0, 0)` on failure.
+     * @return `(line, column)` in the original source; `(0, 0)` on failure.
      */
     std::pair<int, int> resolveLineCol(fp::CharBlock src)
     {
@@ -2321,17 +2102,13 @@ struct Scanner {
         return {0, 0};
     }
 
-    // Per-event emitters.
-    //
-    // Each helper below opens a new object inside the open `events` array and
-    // closes it before returning. They are intentionally small and similar:
-    // the JSON contract lives in the comments at the top of the file.
+    // Per-event emitters
     void emitLoop(const std::string &name, int line, int col,
         const std::list<fp::ActualArgSpec> &args)
     {
         json.beginObject();
         json.key("kind");
-        json.stringValue(name); // op_par_loop_<N>
+        json.stringValue(name);
         json.key("location");
         {
             json.beginObject();
@@ -2365,26 +2142,10 @@ struct Scanner {
         json.endObject();
     }
 
-    // Subprogram events.
-    //
-    // For every subroutine/function definition we emit the metadata the
-    // existing fortran/parser.py exposes via its fparser2 walk: name,
-    // parameter list, dependency call/ref names, and a textual representation
-    // of the subprogram body.
-    //
-    // The body text is sliced from Flang's cooked-source stream rather than
-    // re-pretty-printed via Unparse(). The cooked stream gives us a free-form,
-    // lowercased, includes-expanded, comments-stripped rendering already, and
-    // CharBlock-based slicing avoids a runtime dependency on Unparse's
-    // template instantiation set (which has changed shape across LLVM
-    // releases).
-    //
-    // The Python flang_writer module receives this text and applies its
-    // text-level rewrites (rename_consts, fix_hydra_io, etc.) directly to it.
+    // Subprogram events
+
     /**
-     * @brief Build a CharBlock spanning two cooked-source ranges that belong to the same parse-tree subprogram.
-     *
-     * The cooked source for one translation unit lives in a single contiguous CookedSource buffer, so subtracting the start pointer of `a` from the one-past-end pointer of `b` is well defined when both belong to that buffer.
+     * @brief Build a CharBlock spanning two ranges that belong to the same parse-tree subprogram.
      *
      * @param a Start of the cooked-source span (typically the opening statement).
      * @param b End of the cooked-source span (typically the END statement).
@@ -2400,12 +2161,6 @@ struct Scanner {
         return fp::CharBlock{start, static_cast<std::size_t>(end - start)};
     }
 
-    /**
- * @brief Pre(SubroutineSubprogram): one event per `subroutine ... end subroutine` (top-level or nested).
-     *
-     * @param sub Parse-tree node being visited.
-     * @return Always `true`, so Flang continues walking the subtree.
-     */
     bool Pre(const fp::SubroutineSubprogram &sub)
     {
         // SubroutineSubprogram::t =
@@ -2423,8 +2178,6 @@ struct Scanner {
         std::string name = toLower(nameNode.ToString());
         auto [line, col] = resolveLineCol(nameNode.source);
 
-        // Dummy arguments may be plain Names or alternate-return specs (`*`).
-        // Only the plain Names map to "parameters" in our entity model.
         std::vector<std::string> parameters;
         const auto &dummyArgs = std::get<std::list<fp::DummyArg>>(subStmt.t);
         for (const auto &arg : dummyArgs) {
@@ -2437,9 +2190,7 @@ struct Scanner {
                 arg.u);
         }
 
-        // Walk this subprogram's subtree to collect candidate dependency
-        // names. We then drop the subprogram's own name to avoid spurious
-        // self-recursion edges in the Python entity graph.
+        // walk the subprogram's subtree to collect candidate dependency names
         std::set<std::string> depends;
         DependsCollector dc{depends};
         fp::Walk(sub, dc);
@@ -2454,15 +2205,6 @@ struct Scanner {
         return true;
     }
 
-    /**
- * @brief Pre(FunctionSubprogram): one event per `function ... end function`.
- *
- * Same shape as subroutines, with the slight grammar difference that function
- * parameters are a list of plain Names rather than DummyArgs.
-     *
-     * @param fn Function subprogram.
-     * @return Always `true`, so Flang continues walking the subtree.
-     */
     bool Pre(const fp::FunctionSubprogram &fn)
     {
         // FunctionSubprogram::t =
@@ -2500,8 +2242,10 @@ struct Scanner {
     }
 
     /**
+     * @brief Get the result name from a FunctionStmt.
+     *
      * @param fnStmt Function statement whose RESULT clause is read.
-     * @return Lower-cased RESULT name, or nullopt if no RESULT clause was written.
+     * @return lowercased RESULT name, or nullopt if no RESULT clause was written.
      */
     static std::optional<std::string> resultName(const fp::FunctionStmt &fnStmt)
     {
@@ -2513,7 +2257,7 @@ struct Scanner {
     }
 
     /**
-     * @brief Function_Stmt's prefix (`REAL FUNCTION foo(...)`) return type, if any was written there (as opposed to being declared on a local variable matching the function/result name - the Python side falls back to that when this is absent, mirroring fortran/translator/kernels_c.py's parseFunctionTypeInfo).
+     * @brief Emit the Function_Stmt's prefix return type.
      *
      * @param json JSON writer to append the type node (or JSON null) into.
      * @param fnStmt Function statement whose prefix type, if any, is emitted.
@@ -2531,12 +2275,10 @@ struct Scanner {
     }
 
     /**
-     * @brief Shared writer for the two subprogram event shapes.
-     *
-     * `fnStmt` is non-null only for function_subprogram events, and controls whether the function-specific "result_name"/"result_type" keys are emitted.
+     * @brief Emit a subprogram event.
      *
      * @param kind JSON event kind string.
-     * @param name Lower-cased identifier.
+     * @param name lowercased identifier.
      * @param line Source line (1-based), or 0 if unknown.
      * @param col Source column (1-based), or 0 if unknown.
      * @param parameters Dummy argument names.
@@ -2548,7 +2290,6 @@ struct Scanner {
      * @see LocalsCollector
      * @see BodyCollector
      * @see DeclCollector
-     * @see emitBlock
      */
     void emitSubprogram(const std::string &kind,
         const std::string &name,
@@ -2588,17 +2329,11 @@ struct Scanner {
         }
         json.key("source");
         if (bodyRange.size() > 0) {
-            // CharBlock is a (char*, size_t) into Flang's owning buffer; we
-            // copy it into a std::string for the JSON writer to escape.
             json.stringValue(std::string(bodyRange.begin(), bodyRange.size()));
         } else {
             json.stringValue("");
         }
 
-        // validation data: local array declarations (for the
-        // runtime-dimension check) and a flattened assignment/call walk of
-        // the execution part (for read/inc/slice/const-write checks). See
-        // the LocalsCollector / BodyCollector doc comments above.
         json.key("locals");
         {
             json.beginArray();
@@ -2620,12 +2355,7 @@ struct Scanner {
         json.key("calls");
         json.rawValue(callsJson.str());
 
-        // full typed declarations and a nested statement
-        // tree (see the doc comments above DeclCollector / emitBlock).
-        // These are additive to (and independent of) the validation fields
-        // above - fortran/flang_kernels_c.py never reads "locals"/
-        // "assignments"/"calls", and fortran/flang_validator.py never
-        // reads "decls"/"stmts".
+        // full typed declarations and a nested statement tree
         json.key("decls");
         {
             json.beginArray();
@@ -2650,9 +2380,7 @@ struct Scanner {
         json.endObject();
     }
 
-    // Default no-op fallbacks. Required by Flang's Walk() so that every
-    // node in the parse tree has a matching Pre()/Post() pair regardless of
-    // whether we actually care about it.
+    // no-op fallbacks
     template <typename T>
     bool Pre(const T &)
     {
@@ -2666,8 +2394,6 @@ struct Scanner {
 /**
  * @brief Read all of stdin into a string.
  *
- * Used when we're invoked with --stdin or without a path argument.
- *
  * @return The entire stdin stream as a string.
  */
 static std::string slurpStdin()
@@ -2680,22 +2406,10 @@ static std::string slurpStdin()
 /**
  * @brief Write `contents` to a uniquely-named temp file and return its path.
  *
- * Flang's parser reads from a real file path rather than an in-memory buffer,
- * so stdin-based invocations have to materialise the source on disk briefly.
- * The temp file is deleted from main() before we return.
- *
- * When `preferredDir` is non-empty (typically the directory of --path), we
- * try to place the temp file there first. Flang resolves Fortran INCLUDE
- * relative to the directory of the file currently being scanned, so a temp
- * file under /tmp would otherwise fail to find sibling `.inc` files next to
- * the caller's original source. Falls back to the system temp directory if
- * the preferred location is not writable.
- *
  * @param contents Source text to write to the temp file.
  * @param preferredDir Directory to try first (usually the original source directory).
  * @param uniqueSuffix Disambiguator so concurrent `--batch` units do not collide.
  * @return Filesystem path of the written temp file. Calls `std::exit(1)` if no temp file can be created.
- * @see scanOneUnit
  */
 static std::string writeTempFile(const std::string &contents,
     const std::string &preferredDir = {},
@@ -2745,7 +2459,7 @@ static double msSince(Clock::time_point t0)
 }
 
 /**
- * @brief Parent directory of `path`, or empty if there isn't one.
+ * @brief Get the parent directory of `path`.
  *
  * @param path Path whose parent directory is returned.
  * @return Parent directory of `path`, or empty if there is none.
@@ -2766,10 +2480,10 @@ static std::string parentDirOf(const std::string &path)
 }
 
 /**
- * @brief Escape a string for embedding in a tiny hand-rolled JSON error object.
+ * @brief Escape a string for embedding in a JSON error object.
  *
- * @param s String to escape for a tiny error-object payload.
- * @return `s` with JSON structural characters escaped.
+ * @param s String to escape for a error-object payload.
+ * @return String with JSON structural characters escaped.
  * @see Json::writeString
  */
 static std::string jsonEscape(const std::string &s)
@@ -2804,9 +2518,8 @@ static std::string jsonEscape(const std::string &s)
 /**
  * @brief Parse one translation unit and write one JSON object (plus newline) to stdout.
  *
- * `sourceBytes` non-empty means materialise that text to a temp file next to `reportedPath`; otherwise read `onDiskPath` from disk.
- * Returns 0 on success, 1 on parse failure. On failure still emits a JSON
- * object with an "error" field so --batch callers can fall back per file.
+ * On failure still emits a JSON object with an "error" field so --batch callers can
+ * fall back per file.
  *
  * @param reportedPath Path string to put in the JSON `path` field.
  * @param onDiskPath Real file to parse when `sourceBytes` is empty.
@@ -2818,7 +2531,6 @@ static std::string jsonEscape(const std::string &s)
  * @return 0 on success, 1 on parse failure.
  * @see Scanner
  * @see writeTempFile
- * @see runBatchMode
  */
 static int scanOneUnit(const std::string &reportedPath,
     const std::string &onDiskPath,
@@ -2848,12 +2560,6 @@ static int scanOneUnit(const std::string &reportedPath,
         sourceDir = parentDirOf(originalPath);
     }
 
-    // The Python driver hands us source that has already been run through an
-    // external preprocessor (pcpp/fpp) and a free-form converter, so there
-    // are no live #-directives for Flang's prescanner to process. We still
-    // need Flang's prescanner to do the Fortran-specific work (line
-    // continuations, fixed/free form selection, comment stripping, INCLUDE
-    // expansion, etc.), which is what Parsing::Prescan does.
     fp::Options options;
     options.isFixedForm = false;
     if (!sourceDir.empty()) {
@@ -2889,7 +2595,6 @@ static int scanOneUnit(const std::string &reportedPath,
     };
 
     if (!parsing.messages().empty() && parsing.messages().AnyFatalError()) {
-        // keep Flang's diagnostics on stderr for humans; JSON error for Python
         parsing.messages().Emit(llvm::errs(), cooked);
         return emitError("flang fatal parse error");
     }
@@ -2923,6 +2628,7 @@ static int scanOneUnit(const std::string &reportedPath,
         std::remove(tempFile.c_str());
     }
 
+    // print timing information
     if (emitTiming) {
         const double unitMs = msSince(tUnit);
         std::cerr << "OP2_FLANG_SCAN_TIMING"
@@ -2940,15 +2646,7 @@ static int scanOneUnit(const std::string &reportedPath,
 }
 
 /**
- * @brief Run the multi-unit stdin protocol used by `--batch`.
- *
- * Framing (UTF-8):
- *   OP2_FLANG_BATCH_V1
- *   then repeated:
- *     <reported_path>
- *     <nbytes>
- *     <exactly nbytes of source bytes>
- *   EOF ends the stream.
+ * @brief Run the batched scan protocol.
  *
  * @param includeDirs Extra directories for Fortran INCLUDE resolution.
  * @param emitTiming If true, print OP2_FLANG_SCAN_TIMING lines to stderr.
@@ -3026,18 +2724,26 @@ static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTi
                   << " session_ms=" << msSince(tSession0)
                   << "\n";
     }
-    // non-zero only if every unit failed (partial success still exit 0 so
+    // non-zero only if every unit failed (partial success still exits with 0 so
     // Python can apply per-file fparser2 fallback from JSON "error" fields)
     return (unitIndex > 0 && failures == unitIndex) ? 1 : 0;
 }
 
 /**
- * @brief Entry point: argument parsing, parse pipeline, and JSON emission.
+ * @brief Entry point with argument parsing, parse pipeline, and JSON emission.
  *
  * Steps performed:
- *   1. Argument parsing.
- *   2. Either --batch (multi-unit stdin protocol) or single-unit mode.
- *   3. For each unit: materialise if needed, Prescan+Parse, walk, emit JSON.
+ *   1. Argument parsing
+ *   2. Either batch mode or single-unit mode
+ *   3. For each unit: materialise, Prescan+Parse, walk, emit JSON
+ *
+ * Recognised flags:
+ *   --stdin            Read source from stdin even if <path> is given
+ *   --batch            Scan many units from an OP2_FLANG_BATCH_V1 stdin stream
+ *   --path <reported>  JSON "path" (and directory hint for INCLUDE / temp files)
+ *   --timing           Print OP2_FLANG_SCAN_TIMING lines to stderr
+ *   -I <dir>           Extra directory for Fortran INCLUDE resolution
+ *   <path>             Source file to parse (single-unit mode)
  *
  * @param argc Argument count.
  * @param argv Argument vector.
@@ -3047,17 +2753,6 @@ static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTi
  */
 int main(int argc, char **argv)
 {
-    // Recognised flags:
-    //   --stdin            Force stdin mode even if a path is given.
-    //   --batch            Multi-unit stdin protocol (see runBatchMode).
-    //   --path <reported>  Path string to put in the JSON "path" field
-    //                      (handy when feeding stdin but reporting the
-    //                      original source file name). Also used as the
-    //                      preferred directory for the stdin temp file and
-    //                      as an INCLUDE search directory.
-    //   -I <dir>           Extra directory for Fortran INCLUDE resolution
-    //                      (mirrors the translator's -I / include_dirs).
-    //   <path>             Bare positional - source file to parse.
     std::string path;
     bool readStdin = false;
     bool batchMode = false;
