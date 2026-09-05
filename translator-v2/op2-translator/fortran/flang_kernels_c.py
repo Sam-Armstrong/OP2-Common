@@ -1,24 +1,7 @@
 """
-Flang/JSON port of ``fortran.translator.kernels_c`` (Stage 3: translating a
-Fortran kernel subroutine/function to C++), operating on the ``decls``/
-``stmts`` JSON produced by ``op2-flang-scan`` (see the "Declaration
-serialization" / "Statement-tree serialization" sections of
-translator-v2/flang-scan/op2-flang-scan.cpp) instead of an fparser2 AST.
-
-The FType/FPrimitive/FInteger/FReal/FLogical/FCharacter/FArray/Param type
-hierarchy is reused as-is from fortran.translator.kernels_c: it only encodes
-C++ codegen concerns (never touches fparser2 nodes directly), so there was
-nothing Flang-specific to port there.
-
-One deliberate behavioural difference from kernels_c.py: `info.consts` is
-built directly from `Application.consts()` (the already-parsed `op_decl_const`
-call info) rather than by walking the consts module's full declaration list.
-This works for *both* parser backends, and is actually more robust: Stage 1's
-`parseType` (fortran/parser.py) never returns a character type for an
-op_decl_const call, so the fparser2 path's dead
-`isinstance(type_, FCharacter): loop.consts.discard(name)` branch never
-actually fires in practice, and any *other* module-level declaration (not
-registered via op_decl_const) was never a legitimate substitute for it either.
+Flang port of ``fortran.translator.kernels_c`` (translating a Fortran
+kernel subroutine/function to C++), operating on the ``decls``/
+``stmts`` JSON produced by ``op2-flang-scan`` instead of an fparser2 AST.
 """
 
 from __future__ import annotations
@@ -44,10 +27,8 @@ from op import OpError
 from store import Application, Function
 from util import safeFind
 
-# -----------------------------------------------------------------------------
-# Info / Context
-# -----------------------------------------------------------------------------
 
+# Info / Context
 
 @dataclass
 class SubprogramInfo:
@@ -103,20 +84,24 @@ class Context:
 
 
 def _flang_body(entity: Function) -> Dict[str, Any]:
+    """
+    Return the decls/stmts JSON (`flang_body`) attached to `entity`
+    by ``op2-flang-scan``. Raises if translator not run with `--parser flang`.
+    """
     body = getattr(entity, "flang_body", None)
     if body is None:
-        raise OpError(f"Missing Flang body data for {entity.name} - did Stage 1 run with --parser flang?")
+        raise OpError(f"Missing Flang body data for {entity.name}")
     return body
 
 
 def canTranslateWithFlang(entities: List[Function]) -> bool:
+    """
+    True if every entity has a `flang_body`.
+    """
     return all(getattr(e, "flang_body", None) is not None for e in entities)
 
 
-# -----------------------------------------------------------------------------
 # parseInfo
-# -----------------------------------------------------------------------------
-
 
 def parseInfo(
     entities: List[Function],
@@ -125,6 +110,14 @@ def parseInfo(
     config: Dict[str, Any],
     const_rename: Optional[Callable[[str], str]] = None,
 ) -> Info:
+    """
+    Build the translation `Info` for a kernel and its callees.
+
+    Walks `entities` (the entry kernel first, then transitive callees),
+    records each subprogram, attaches const types from `app`, fills in
+    per-subprogram type maps, maps loop arguments onto dummy parameters,
+    and resolves which parameters are const.
+    """
     info = Info(loop, config)
 
     is_first = True
@@ -148,6 +141,10 @@ def parseInfo(
 
 
 def _ftypeFromOpType(typ: OP.Type, dim: int) -> FType:
+    """
+    Convert an OP2 `Type` (and optional array `dim`) into the `FType`
+    used by the C++ emission.
+    """
     if isinstance(typ, OP.Int):
         if not typ.signed:
             raise OpError(f"Unsupported unsigned const type: {typ}")
@@ -157,7 +154,7 @@ def _ftypeFromOpType(typ: OP.Type, dim: int) -> FType:
     elif isinstance(typ, OP.Bool):
         inner = FLogical()
     else:
-        raise OpError(f"Unsupported const type for Stage 3 (Flang) translation: {typ}")
+        raise OpError(f"Unsupported const type for Flang translation: {typ}")
 
     if dim <= 1:
         return inner
@@ -166,6 +163,10 @@ def _ftypeFromOpType(typ: OP.Type, dim: int) -> FType:
 
 
 def buildConstsInfo(app: Application, const_rename: Optional[Callable[[str], str]]) -> Dict[str, FType]:
+    """
+    Map each application const (optionally renamed by `const_rename`) to
+    an `FType`.
+    """
     consts: Dict[str, FType] = {}
 
     for c in app.consts():
@@ -176,6 +177,10 @@ def buildConstsInfo(app: Application, const_rename: Optional[Callable[[str], str
 
 
 def parseSubprogramInfo(entity: Function) -> SubprogramInfo:
+    """
+    Collect the name, dummy parameters, and (for functions) result
+    variable of a kernel or helper from `entity.flang_body`.
+    """
     body = _flang_body(entity)
     sub_info = SubprogramInfo(entity.name, body)
     sub_info.params = [Param(p) for p in entity.parameters]
@@ -188,6 +193,9 @@ def parseSubprogramInfo(entity: Function) -> SubprogramInfo:
 
 
 def parseSubprogramTypeInfo(ctx: Context) -> None:
+    """
+    Fill `ctx.sub_info.types` from the subprogram's type declarations.
+    """
     body = ctx.sub_info.body
     ctx.sub_info.types = parseTypes(body.get("decls", []), ctx)
 
@@ -214,6 +222,9 @@ def parseSubprogramTypeInfo(ctx: Context) -> None:
 
 
 def parseTypes(decls: List[Dict[str, Any]], ctx: Context) -> Dict[str, FType]:
+    """
+    Build a name-to-`FType` map from `type_decl` nodes.
+    """
     type_map: Dict[str, FType] = {}
 
     for decl in decls:
@@ -239,6 +250,10 @@ def parseTypes(decls: List[Dict[str, Any]], ctx: Context) -> Dict[str, FType]:
 
 
 def parseIntrinsicType(type_obj: Dict[str, Any], ctx: Context) -> FType:
+    """
+    Translate a Flang intrinsic type into an `FInteger` / `FReal` /
+    `FLogical` / `FCharacter`.
+    """
     if type_obj.get("kind") != "intrinsic":
         ctx.error(f"Unable to parse intrinsic type: {type_obj}")
 
@@ -272,6 +287,9 @@ def parseIntrinsicType(type_obj: Dict[str, Any], ctx: Context) -> FType:
 
 
 def parseArraySpec(dim_obj: Dict[str, Any], ctx: Context) -> List[Tuple[str, str]]:
+    """
+    Translate an explicit shape array spec into `(lower, upper)` bound pairs.
+    """
     if dim_obj.get("kind") != "explicit":
         ctx.error(f"Unsupported array spec: {dim_obj}")
 
@@ -288,6 +306,10 @@ def parseArraySpec(dim_obj: Dict[str, Any], ctx: Context) -> List[Tuple[str, str
 
 
 def resolveOpArgs(entities: List[Function], info: Info, loop: OP.Loop) -> None:
+    """
+    Attach each `loop` argument to the dummy parameter it maps onto,
+    including through nested calls.
+    """
     def setOpArg(entity2: Function, param_idx: int, info2: Info, op_arg: OP.Arg) -> bool:
         sub_info2 = info2.subprograms[entity2.name]
         sub_info2.params[param_idx].op_arg = op_arg
@@ -297,12 +319,13 @@ def resolveOpArgs(entities: List[Function], info: Info, loop: OP.Loop) -> None:
         map_param(entities[0], i, entities, setOpArg, info, loop.args[i])
 
 
-# -----------------------------------------------------------------------------
 # resolveParamAccesses
-# -----------------------------------------------------------------------------
-
 
 def _exprBaseName(expr: Dict[str, Any]) -> Optional[str]:
+    """
+    Return the identifier of a `name` / `part_ref` / `funcref` expression,
+    or None if `expr` is not a simple reference.
+    """
     kind = expr.get("kind")
     if kind == "name":
         return expr.get("value")
@@ -312,6 +335,10 @@ def _exprBaseName(expr: Dict[str, Any]) -> Optional[str]:
 
 
 def _collectDoVars(stmts: List[Dict[str, Any]]) -> Set[str]:
+    """
+    Collect counted do loop control variables from `stmts` and nested
+    if/do bodies.
+    """
     names: Set[str] = set()
 
     def walk(items: List[Dict[str, Any]]) -> None:
@@ -332,13 +359,6 @@ def _collectDoVars(stmts: List[Dict[str, Any]]) -> Set[str]:
 
 
 def _findCallsForParamWithAtomic(body: Dict[str, Any], param: str, known_names: Set[str]) -> List[Tuple[str, int]]:
-    """
-    Like fortran.flang_validator._find_calls_for_param, but also recognizes
-    "atomicadd" as a valid call target even though it is never a known
-    subprogram - mirroring kernels_c.py's local `getCall`'s special case
-    (`if func_name != "atomicAdd" and sub_info is None: return None`), which
-    resolveParamAccessesLocal relies on to mark an INC param as non-const.
-    """
     results: List[Tuple[str, int]] = []
 
     def record(name: Optional[str], idx: int) -> None:
@@ -400,6 +420,9 @@ def _findCallsForParamWithAtomic(body: Dict[str, Any], param: str, known_names: 
 
 
 def resolveParamAccesses(info: Info) -> None:
+    """
+    Decide `is_const` for every dummy parameter of every subprogram.
+    """
     for sub_info in info.subprograms.values():
         resolveParamAccessesLocal(Context(info, sub_info))
 
@@ -413,6 +436,9 @@ def resolveParamAccesses(info: Info) -> None:
 
 
 def resolveParamAccessesLocal(ctx: Context) -> None:
+    """
+    Mark local writes and call-site uses for each dummy parameter of `ctx.sub_info`.
+    """
     body = ctx.sub_info.body
 
     assigned_to: Set[str] = set()
@@ -442,6 +468,10 @@ def resolveParamAccessesLocal(ctx: Context) -> None:
 
 
 def tryResolveParams(ctx: Context) -> bool:
+    """
+    Propagate callee `is_const` back onto unresolved parameters of `ctx.sub_info`.
+    Returns True if any parameter is waiting on a callee.
+    """
     has_unresolved = False
 
     for param in ctx.sub_info.params:
@@ -452,10 +482,8 @@ def tryResolveParams(ctx: Context) -> bool:
         unresolved = False
 
         for target_name, idx in param.as_arg:
-            # "atomicAdd" (or any other unknown callee) is never a real
-            # SubprogramInfo; skip it rather than crashing - it was already
-            # accounted for directly in resolveParamAccessesLocal.
             target_sub = ctx.info.subprograms.get(target_name)
+
             if target_sub is None:
                 continue
 
@@ -477,12 +505,12 @@ def tryResolveParams(ctx: Context) -> bool:
     return has_unresolved
 
 
-# -----------------------------------------------------------------------------
 # translate
-# -----------------------------------------------------------------------------
-
 
 def translate(info: Info) -> str:
+    """
+    Emit C++ prototypes and definitions for every subprogram in `info`.
+    """
     decls = ""
     srcs = ""
 
@@ -496,6 +524,9 @@ def translate(info: Info) -> str:
 
 
 def translateSubprogram(ctx: Context) -> Tuple[str, str]:
+    """
+    Translate one Fortran subprogram to a C++ prototype and definition.
+    """
     body = ctx.sub_info.body
 
     param_decls = []
@@ -560,8 +591,7 @@ def translateSpecificationPart(decls: List[Dict[str, Any]], ctx: Context) -> str
             init_src += translateDataStmt(decl, ctx)
             continue
 
-        # DeclCollector only ever emits type_decl/parameter_stmt/data_stmt
-        # nodes into "decls" - nothing else should reach here.
+        # DeclCollector only emits type_decl/parameter_stmt/data_stmt, nothing else should reach this point
         continue
 
     src = ""
@@ -590,6 +620,9 @@ def translateSpecificationPart(decls: List[Dict[str, Any]], ctx: Context) -> str
 
 
 def translateDataStmt(data_stmt: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate a DATA statement into a sequence of C++ assignments.
+    """
     src = ""
 
     for s in data_stmt.get("sets", []):
@@ -612,6 +645,9 @@ def translateDataStmt(data_stmt: Dict[str, Any], ctx: Context) -> str:
 
 
 def translateExecutionPart(stmts: List[Dict[str, Any]], ctx: Context) -> str:
+    """
+    Translate the executable statements of a subprogram.
+    """
     src = ""
     last = ""
 
@@ -626,6 +662,9 @@ def translateExecutionPart(stmts: List[Dict[str, Any]], ctx: Context) -> str:
 
 
 def translateStmt(stmt: Dict[str, Any], ctx: Context) -> str:
+    """
+    Dispatch one statement node to the matching translator.
+    """
     kind = stmt.get("kind")
 
     if kind == "assign":
@@ -665,6 +704,9 @@ def translateStmt(stmt: Dict[str, Any], ctx: Context) -> str:
 
 
 def translateCallStmt(call_stmt: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate a CALL statement to `name(args);`.
+    """
     call_target = translateName(call_stmt["name"], ctx)
     args = call_stmt.get("args", [])
 
@@ -675,6 +717,9 @@ def translateCallStmt(call_stmt: Dict[str, Any], ctx: Context) -> str:
 
 
 def translateIfConstruct(if_construct: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate an IF / ELSE IF / ELSE construct.
+    """
     parts = []
 
     for i, branch in enumerate(if_construct.get("branches", [])):
@@ -691,6 +736,9 @@ def translateIfConstruct(if_construct: Dict[str, Any], ctx: Context) -> str:
 
 
 def translateDoConstruct(do_stmt: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate a WHILE or counted DO loop.
+    """
     mode = do_stmt.get("mode")
     body = "".join(translateStmt(s, ctx) for s in do_stmt.get("body", []))
 
@@ -712,9 +760,7 @@ def translateDoConstruct(do_stmt: Dict[str, Any], ctx: Context) -> str:
     return f"{header} {{\n{indent(body)}\n}}\n"
 
 
-# -----------------------------------------------------------------------------
 # Names
-# -----------------------------------------------------------------------------
 
 _RENAME = {
     "atomicadd": "atomicAdd",
@@ -753,9 +799,7 @@ def translateName(raw_name: str, ctx: Optional[Context] = None) -> str:
     return raw
 
 
-# -----------------------------------------------------------------------------
 # Expressions
-# -----------------------------------------------------------------------------
 
 INTRINSIC_FUNCS = {
     "abs": "f2c::abs",
@@ -800,6 +844,9 @@ _LEVEL4_OPS = {".eq.", ".ne.", ".lt.", ".le.", ".gt.", ".ge."}
 
 
 def translateExpr(expr: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate an expression JSON node to C++.
+    """
     kind = expr.get("kind")
 
     if kind == "name":
@@ -839,6 +886,9 @@ def translateExpr(expr: Dict[str, Any], ctx: Context) -> str:
 
 
 def translateBinaryExpr(expr: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate a binary operator.
+    """
     op = expr["op"]
     left = translateExpr(expr["left"], ctx)
     right = translateExpr(expr["right"], ctx)
@@ -890,6 +940,9 @@ def translateRealLiteral(expr: Dict[str, Any], ctx: Context) -> str:
 
 
 def _refNameAndItems(expr: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]], bool]:
+    """
+    Unpack a `part_ref` or `funcref` into `(name, items, allow_slice)`.
+    """
     if expr["kind"] == "part_ref":
         return expr["name"], expr.get("subscripts", []), True
 
@@ -897,6 +950,9 @@ def _refNameAndItems(expr: Dict[str, Any]) -> Tuple[str, List[Dict[str, Any]], b
 
 
 def translateRef(expr: Dict[str, Any], ctx: Context) -> str:
+    """
+    Translate an array index, function call, or const lookup.
+    """
     raw_name, items, allow_slice = _refNameAndItems(expr)
     lname_raw = raw_name.lower()
 
@@ -940,7 +996,6 @@ def translateRef(expr: Dict[str, Any], ctx: Context) -> str:
 
         return f"{name}.slice({', '.join(extents)})"
 
-    # Only thing left should be array consts
     sizes = []
     for lb, ub in array_type.shape:
         if lb == "1":
@@ -978,6 +1033,9 @@ def translateIntrinsicCall(func_name: str, items: List[Dict[str, Any]], ctx: Con
 
 
 def translateArgList(items: List[Dict[str, Any]], ctx: Context, call_target: str) -> str:
+    """
+    Translate the argument list of a call.
+    """
     if call_target == "atomicAdd":
         assert len(items) == 2
         return ", ".join([f"&({translateExpr(items[0], ctx)})", translateExpr(items[1], ctx)])
