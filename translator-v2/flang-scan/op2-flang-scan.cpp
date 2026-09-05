@@ -331,7 +331,7 @@ static std::optional<int64_t> foldLiteralConstant(const fp::LiteralConstant &lit
             return std::nullopt;
         }
     },
-                      lit.u);
+        lit.u);
 }
 
 /**
@@ -397,7 +397,7 @@ static std::optional<int64_t> foldIntExpr(const fp::Expr &e)
             return std::nullopt;
         }
     },
-                      e.u);
+        e.u);
 }
 
 /**
@@ -426,12 +426,12 @@ static std::optional<std::string> designatorToName(const fp::Designator &d)
                     return std::nullopt;
                 }
             },
-                              alt.u);
+                alt.u);
         } else {
             return std::nullopt;
         }
     },
-                      d.u);
+        d.u);
 }
 
 /**
@@ -480,7 +480,7 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e)
                     return std::nullopt;
                 }
             },
-                              pd.u);
+                pd.u);
         } else if constexpr (std::is_same_v<T, fp::StructureConstructor>) {
             // Keyword-arg form; Flang parses it directly as a StructureConstructor.
             // We do not see this for the plain-positional op_arg_dat calls, but
@@ -490,7 +490,7 @@ static std::optional<CallView> exprAsCall(const fp::Expr &e)
             return std::nullopt;
         }
     },
-                      e.u);
+        e.u);
 }
 
 /**
@@ -545,12 +545,12 @@ static void emitExpr(Json &json, const fp::Expr &e)
                         return std::nullopt;
                     }
                 },
-                                  alt.u);
+                    alt.u);
             } else {
                 return std::nullopt;
             }
         },
-                          expr.u);
+            expr.u);
     };
     if (auto s = extractCharLiteral(e)) {
         json.beginObject();
@@ -578,7 +578,7 @@ static void emitExpr(Json &json, const fp::Expr &e)
         }
         return false;
     },
-                              e.u);
+        e.u);
     if (emitted) return;
 
     // 4. Nested call, e.g. op_arg_dat(...), op_arg_gbl(...), op_arg_idx(...).
@@ -634,7 +634,7 @@ static void emitActualArgs(Json &json, const std::list<fp::ActualArgSpec> &args)
             }
             return false;
         },
-                                  aa.u);
+            aa.u);
         if (!handled) {
             json.beginObject();
             json.key("kind");
@@ -688,7 +688,7 @@ struct DependsCollector {
                 out.insert(toLower(p.ToString()));
             }
         },
-                   pd.u);
+            pd.u);
         return true;
     }
 
@@ -710,7 +710,7 @@ struct DependsCollector {
                 out.insert(toLower(p.ToString()));
             }
         },
-                   pd.u);
+            pd.u);
         return true;
     }
 
@@ -751,7 +751,7 @@ static std::string kindParamToString(const fp::KindParam &kp)
             return toLower(alt.thing.thing.thing.ToString());
         }
     },
-                      kp.u);
+        kp.u);
 }
 
 /**
@@ -811,7 +811,7 @@ static void emitLiteralConstant(Json &json, const fp::LiteralConstant &lit)
         }
         return false;
     },
-                              lit.u);
+        lit.u);
 
     if (!emitted) {
         json.beginObject();
@@ -858,7 +858,7 @@ static void emitBodySubscript(Json &json, const fp::SectionSubscript &sub)
             emitBodyExpr(json, alt.thing.value());
         }
     },
-               sub.u);
+        sub.u);
 }
 
 /**
@@ -907,16 +907,16 @@ static void emitDesignator(Json &json, const fp::Designator &d)
                         }
                         return false;
                     },
-                                      ae.Base().u);
+                        ae.Base().u);
                 } else {
                     return false;
                 }
             },
-                              alt.u);
+                alt.u);
         }
         return false;
     },
-                              d.u);
+        d.u);
 
     if (!emitted) {
         json.beginObject();
@@ -949,7 +949,7 @@ static void emitFuncRef(Json &json, const fp::FunctionReference &fr)
             return std::nullopt;
         }
     },
-                                                 pd.u);
+        pd.u);
 
     if (!name) {
         json.beginObject();
@@ -978,7 +978,7 @@ static void emitFuncRef(Json &json, const fp::FunctionReference &fr)
             }
             return false;
         },
-                                  aa.u);
+            aa.u);
         if (!handled) {
             json.beginObject();
             json.key("kind");
@@ -1012,7 +1012,7 @@ static void emitVariable(Json &json, const fp::Variable &v)
             emitFuncRef(json, alt.value());
         }
     },
-               v.u);
+        v.u);
 }
 
 static void emitBodyExpr(Json &json, const fp::Expr &e)
@@ -1113,7 +1113,7 @@ static void emitBodyExpr(Json &json, const fp::Expr &e)
 
         return false;
     },
-                              e.u);
+        e.u);
 
     if (emitted) return;
 
@@ -1292,7 +1292,7 @@ struct BodyCollector {
             }
             return false;
         },
-                                  pd.u);
+            pd.u);
 
         if (!gotName) return true;
 
@@ -1315,7 +1315,7 @@ struct BodyCollector {
                 }
                 return false;
             },
-                                      aa.u);
+                aa.u);
             if (!handled) {
                 jsonCalls.beginObject();
                 jsonCalls.key("kind");
@@ -1458,7 +1458,7 @@ static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs)
                     emitCharLength(json, inner);
                 }
             },
-                       alt.u);
+                alt.u);
         } else {
             // LengthAndKind: tuple<optional<TypeParamValue>, ScalarIntConstantExpr>.
             const auto &lengthOpt = std::get<0>(alt.t);
@@ -1466,7 +1466,7 @@ static void emitCharLen(Json &json, const std::optional<fp::CharSelector> &cs)
             else json.nullValue();
         }
     },
-               cs->u);
+        cs->u);
 }
 
 /**
@@ -1514,7 +1514,7 @@ static void emitIntrinsicType(Json &json, const fp::IntrinsicTypeSpec &its)
         }
         json.endObject();
     },
-               its.u);
+        its.u);
 }
 
 /**
@@ -1661,7 +1661,7 @@ static void emitDataStmtConstant(Json &json, const fp::DataStmtConstant &dc)
         }
         return false;
     },
-                              dc.u);
+        dc.u);
 
     if (!emitted) {
         json.beginObject();
@@ -1713,7 +1713,7 @@ static void emitDataStmtNode(Json &json, const fp::DataStmt &dstmt)
                     json.endObject();
                 }
             },
-                       obj.u);
+                obj.u);
         }
         json.endArray();
 
@@ -1874,7 +1874,7 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
         }
         return false;
     },
-                              pd.u);
+        pd.u);
 
     if (!gotName) {
         json.beginObject();
@@ -1907,7 +1907,7 @@ static void emitCallStmtNode(Json &json, const fp::CallStmt &call, const fp::All
             }
             return false;
         },
-                                  aa.u);
+            aa.u);
         if (!handled) {
             json.beginObject();
             json.key("kind");
@@ -2000,7 +2000,7 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
 
         return false;
     },
-                              a.u);
+        a.u);
 
     if (!emitted) {
         json.beginObject();
@@ -2115,7 +2115,7 @@ static void emitDoConstruct(Json &json, const fp::DoConstruct &dc, const fp::All
             }
             return false; // Concurrent (DO CONCURRENT)
         },
-                             loopControlOpt->u);
+            loopControlOpt->u);
     }
 
     if (!handled) {
@@ -2167,7 +2167,7 @@ static void emitExecutableConstruct(Json &json, const fp::ExecutableConstruct &e
         }
         return false;
     },
-                              ec.u);
+        ec.u);
 
     if (!emitted) {
         json.beginObject();
@@ -2192,7 +2192,7 @@ static void emitExecutionPartConstruct(Json &json, const fp::ExecutionPartConstr
         }
         return false;
     },
-                              epc.u);
+        epc.u);
 
     if (!emitted) {
         json.beginObject();
@@ -2281,7 +2281,7 @@ struct Scanner {
                 return false;
             }
         },
-                                  pd.u);
+            pd.u);
 
         if (!gotName) return true;
 
@@ -2327,7 +2327,7 @@ struct Scanner {
     // closes it before returning. They are intentionally small and similar:
     // the JSON contract lives in the comments at the top of the file.
     void emitLoop(const std::string &name, int line, int col,
-                  const std::list<fp::ActualArgSpec> &args)
+        const std::list<fp::ActualArgSpec> &args)
     {
         json.beginObject();
         json.key("kind");
@@ -2434,7 +2434,7 @@ struct Scanner {
                     parameters.push_back(toLower(inner.ToString()));
                 }
             },
-                       arg.u);
+                arg.u);
         }
 
         // Walk this subprogram's subtree to collect candidate dependency
@@ -2446,11 +2446,11 @@ struct Scanner {
         depends.erase(name);
 
         emitSubprogram("subroutine_subprogram", name, line, col,
-                       parameters, depends,
-                       spanningRange(startStmt.source, endStmt.source),
-                       std::get<fp::SpecificationPart>(sub.t),
-                       std::get<fp::ExecutionPart>(sub.t),
-                       /*fnStmt=*/nullptr);
+            parameters, depends,
+            spanningRange(startStmt.source, endStmt.source),
+            std::get<fp::SpecificationPart>(sub.t),
+            std::get<fp::ExecutionPart>(sub.t),
+            /*fnStmt=*/nullptr);
         return true;
     }
 
@@ -2491,11 +2491,11 @@ struct Scanner {
         depends.erase(name);
 
         emitSubprogram("function_subprogram", name, line, col,
-                       parameters, depends,
-                       spanningRange(startStmt.source, endStmt.source),
-                       std::get<fp::SpecificationPart>(fn.t),
-                       std::get<fp::ExecutionPart>(fn.t),
-                       &fnStmt);
+            parameters, depends,
+            spanningRange(startStmt.source, endStmt.source),
+            std::get<fp::SpecificationPart>(fn.t),
+            std::get<fp::ExecutionPart>(fn.t),
+            &fnStmt);
         return true;
     }
 
@@ -2551,14 +2551,14 @@ struct Scanner {
      * @see emitBlock
      */
     void emitSubprogram(const std::string &kind,
-                        const std::string &name,
-                        int line, int col,
-                        const std::vector<std::string> &parameters,
-                        const std::set<std::string> &depends,
-                        fp::CharBlock bodyRange,
-                        const fp::SpecificationPart &spec,
-                        const fp::ExecutionPart &exec,
-                        const fp::FunctionStmt *fnStmt)
+        const std::string &name,
+        int line, int col,
+        const std::vector<std::string> &parameters,
+        const std::set<std::string> &depends,
+        fp::CharBlock bodyRange,
+        const fp::SpecificationPart &spec,
+        const fp::ExecutionPart &exec,
+        const fp::FunctionStmt *fnStmt)
     {
         json.beginObject();
         json.key("kind");
@@ -2698,8 +2698,8 @@ static std::string slurpStdin()
  * @see scanOneUnit
  */
 static std::string writeTempFile(const std::string &contents,
-                                 const std::string &preferredDir = {},
-                                 int uniqueSuffix = 0)
+    const std::string &preferredDir = {},
+    int uniqueSuffix = 0)
 {
     namespace fs = std::filesystem;
     const std::string name = "op2-flang-scan-" + std::to_string(::getpid()) +
@@ -2821,12 +2821,12 @@ static std::string jsonEscape(const std::string &s)
  * @see runBatchMode
  */
 static int scanOneUnit(const std::string &reportedPath,
-                       const std::string &onDiskPath,
-                       const std::string &sourceBytes,
-                       const std::vector<std::string> &includeDirs,
-                       bool emitTiming,
-                       int tempSuffix,
-                       Clock::time_point tSession0)
+    const std::string &onDiskPath,
+    const std::string &sourceBytes,
+    const std::vector<std::string> &includeDirs,
+    bool emitTiming,
+    int tempSuffix,
+    Clock::time_point tSession0)
 {
     const auto tUnit = Clock::now();
     std::string path = onDiskPath;
@@ -3014,7 +3014,7 @@ static int runBatchMode(const std::vector<std::string> &includeDirs, bool emitTi
             return 2;
         }
         if (scanOneUnit(reportedPath, /*onDiskPath=*/{}, body, includeDirs,
-                        emitTiming, unitIndex++, tSession0) != 0) {
+                emitTiming, unitIndex++, tSession0) != 0) {
             ++failures;
         }
     }
