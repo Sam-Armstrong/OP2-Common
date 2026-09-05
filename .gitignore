@@ -17,5 +17,3 @@
 *.swp
 
 translator-v2/flang-scan/build
-translator-v2/flang-scan/.clang-format
-translator-v2/flang-scan/.clangd
