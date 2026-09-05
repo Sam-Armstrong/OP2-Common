@@ -255,42 +255,6 @@ static std::string toLower(std::string s)
     return s;
 }
 
-// Expression serialization
-//
-// `op_par_loop_N` and `op_decl_const` arguments arrive at parse time as
-// generic `Fortran::parser::Expr` nodes. We translate each one into a small
-// tagged JSON dictionary so the Python translator gets a stable, version-
-// independent representation that doesn't require it to understand Flang's
-// (large, churn-prone) parse-tree variant set.
-//
-// Output shapes
-//
-//   {"kind": "name",   "value": "<identifier>"}
-//       A bare identifier reference, e.g. `OP_READ`, `OP_ID`, `p_q`.
-//
-//   {"kind": "int",    "value": <folded-int>}
-//       Anything that constant-folds to an integer (literals, signed
-//       literals, parenthesised, simple +/-/*/divide/power chains).
-//       Used for op_par_loop's iteration count, op_decl_const's dimension,
-//       op_arg_dat indices, etc.
-//
-//   {"kind": "string", "value": "<literal contents>"}
-//       A character literal, with surrounding quotes and any kind/encoding
-//       prefix stripped. Used for the `typ` argument of op_decl_const,
-//       e.g. `"real(8)"`.
-//
-//   {"kind": "call",   "name": "<identifier>", "args": [ ...expr... ]}
-//       A nested function-style call, e.g. `op_arg_dat(...)` /
-//       `op_arg_gbl(...)` / `op_arg_idx(...)`. We recurse into the args.
-//
-//   {"kind": "raw",    "source": "<original source text>"}
-//       Fallback for anything the dispatch below doesn't recognise. The
-//       Python side either re-parses the source slice or, if that also
-//       fails, surfaces a clear error pointing at the location.
-//
-// The fparser2-driven Stage 1 parser in op2-translator/fortran/parser.py
-// expects exactly these five tags; keep them in sync if you add more.
-
 /**
  * @brief Convenience wrapper: get a CharBlock back as a std::string.
  *
@@ -762,70 +726,6 @@ struct DependsCollector {
     {}
 };
 
-// Kernel-body expression/statement serialization (for Stage 2 validation)
-//
-// Stage 2 (op2-translator/fortran/validator.py) needs to inspect *how* each
-// kernel dummy parameter is used inside the kernel body: is it written when
-// it should only be read, is it incremented correctly, is it sliced in a
-// way that's incompatible with SIMD stride insertion, etc. The original
-// implementation walks fparser2's AST directly, using parent-pointer checks
-// (e.g. "is this Name the base of a Part_Ref?"). To run equivalent checks
-// without fparser2 (--parser flang), we serialize a simplified expression
-// tree for each subprogram's body and port the checks to walk that JSON
-// tree in Python (see fortran/flang_validator.py), where the "parent"
-// context is simply whatever the recursive walk was descending from.
-//
-// This is deliberately NOT a full unparse: we only capture the node shapes
-// the validator actually inspects (assignments, calls, array/section
-// subscripts, and the +/-/* arithmetic skeleton needed by the
-// increment check). Anything else collapses to a "literal"/"raw" leaf
-// carrying the exact source text, which the Python side treats opaquely.
-//
-// Node shapes (all objects have a "kind" field):
-//   {"kind": "name", "value": "<identifier>"}
-//   {"kind": "literal"|"raw", "source": "<text>"}
-//   {"kind": "part_ref", "name": "<base identifier>", "subscripts": [...]}
-//       An unambiguous array-element/section reference (Designator ->
-//       DataRef -> ArrayElement). Each subscript is either a nested expr
-//       node (a scalar/vector index - Flang's grammar can't tell those
-//       apart without semantics), or a "triplet" object (below).
-//   {"kind": "triplet", "lower": expr|null, "upper": expr|null, "stride": expr|null}
-//       A subscript-triplet (`a:b`, `a:b:c`, `:`, ...) - the syntactic
-//       marker for a Fortran array *section*, which is what makes stride
-//       insertion unsafe.
-//   {"kind": "funcref", "name": "<callee>", "args": [...]}
-//       A parenthesised reference that Flang cannot yet disambiguate
-//       between "array element" and "function call" (no semantics have
-//       run). The Python side resolves this the same way DependsCollector's
-//       output is resolved: by checking whether "name" matches a known
-//       Function entity.
-//   {"kind": "binary", "op": "+"|"-"|"*"|"/"|"**"|"=="|"!="|"<"|"<="|">"|">="|
-//                            "&&"|"||"|"//", "left": expr, "right": expr}
-//       Arithmetic, relational (.EQ./.LT./...), logical (.AND./.OR./.EQV./
-//       .NEQV.) and character-concatenation (//) binary operators all share
-//       this shape; "op" is already the C++ spelling, not the Fortran one.
-//   {"kind": "paren", "expr": expr}
-//   {"kind": "unary", "op": "+"|"-"|"!", "expr": expr}
-//       "!" is Fortran's `.NOT.`.
-//   {"kind": "int_lit", "text": "<digits>", "kind_text": str|null}
-//   {"kind": "real_lit", "text": "<digits-with-exponent>", "kind_text": str|null}
-//       "text" is the literal's source spelling verbatim (so callers can
-//       decide how to render exponent letters / kind suffixes); "kind_text"
-//       is the raw source text of the kind selector, e.g. "8"/"RK"/"IK4",
-//       or null if none was written.
-//   {"kind": "logical_lit", "value": true|false}
-//   {"kind": "char_lit", "value": "<contents>"} (quotes/kind prefix stripped)
-//   {"kind": "unsupported", "tag": "<node-name>", "source": "<text>"}
-//       A Fortran expression form Stage 3 does not (yet) understand
-//       (defined operators, array/structure constructors, %LOC, complex
-//       literals, ...). The Python side raises a clear "unsupported"
-//       error pointing at the source text rather than guessing.
-//
-// Stage 2's checks only ever pattern-match on "name"/"part_ref"/"funcref"/
-// "binary"/"paren"/"unary" and silently skip anything else, so adding the
-// literal/unsupported leaf shapes above is backwards compatible with
-// fortran/flang_validator.py.
-
 static void emitBodyExpr(Json &json, const fp::Expr &e);
 
 /**
@@ -1167,7 +1067,7 @@ static void emitBodyExpr(Json &json, const fp::Expr &e)
             // IntrinsicBinary tuple<Indirection<Expr>, Indirection<Expr>>
             // shape; only the spelling of "op" differs. We emit the C++
             // spelling directly rather than the Fortran token, since the
-            // only consumer is Stage 3 code generation.
+            // only consumer is Fortran to C++ code generation.
             const char *op = "+";
             if constexpr (std::is_same_v<T, fp::Expr::Subtract>) op = "-";
             else if constexpr (std::is_same_v<T, fp::Expr::Multiply>) op = "*";
@@ -1234,7 +1134,7 @@ static void emitBodyExpr(Json &json, const fp::Expr &e)
 
 // NameCollector / LocalsCollector: local array declaration walker.
 //
-// Stage 2's "runtime dimension local arrays" check flags local arrays whose
+// The validation step "runtime dimension local arrays" check flags local arrays whose
 // declared bounds reference a kernel parameter or an OP2 const (both
 // runtime values - a red flag for stack-allocated arrays, especially on a
 // GPU). For every locally-declared array we collect the lower-cased name of
@@ -1325,13 +1225,13 @@ struct LocalsCollector {
 };
 
 /**
- * @brief BodyCollector: per-subprogram assignment/call walker (Stage 2 validation).
+ * @brief BodyCollector: per-subprogram assignment/call walker
  *
  * Walks one subprogram's Execution_Part and records every assignment
  * statement (lhs/rhs expr trees) and every direct subroutine call (`call
  * foo(...)`, with its own arg expr trees). Like fparser2's flat `fpu.walk`,
  * this deliberately ignores control-flow nesting (if/do/...) - none of the
- * Stage 2 checks care which branch/loop a statement lives in, only that it
+ * validation checks care which branch/loop a statement lives in, only that it
  * exists somewhere in the body.
  *
  * Assignments and calls are written into two separate Json instances
@@ -1475,55 +1375,10 @@ static const fp::Expr &unwrapSpecificationExpr(const fp::SpecificationExpr &e)
     return unwrapScalarIntExpr(e.v);
 }
 
-// Declaration serialization (for Stage 3 C++ code generation)
-//
-// fortran/flang_kernels_c.py needs the same information
-// fortran/translator/kernels_c.py's `parseTypes` pulls out of an fparser2
-// Specification_Part: for every declared name, its intrinsic type (with
-// kind), whether it is an array (and if so its explicit-shape bounds), and
-// whether it is a compile-time PARAMETER (and if so, its value).
-//
-// Node shapes (all objects have a "kind" field):
-//   {"kind": "type_decl",
-//    "type": <type>,
-//    "is_parameter": bool,
-//    "dim": <array-spec>|null,        (a shared `dimension(...)` attribute)
-//    "entities": [{"name": str, "dim": <array-spec>|null, "init": expr|null}, ...]}
-//   {"kind": "parameter_stmt", "defs": [{"name": str, "value": expr}, ...]}
-//       The `PARAMETER(name = value, ...)` statement form (as opposed to
-//       the `type, PARAMETER :: name = value` attribute form, which shows
-//       up as a "type_decl" with is_parameter=true and a per-entity init).
-//   {"kind": "data_stmt", "sets": [...]}  (see emitDataStmtNode below)
-//
-// <type> shapes:
-//   {"kind": "intrinsic", "base": "integer"|"real"|"logical"|"character",
-//    "kind_text": str|null, "charlen": expr|null}
-//       "kind_text" is the raw kind-selector text (see kindParamToString);
-//       "charlen" is only meaningful when base == "character".
-//   {"kind": "unsupported"}
-//       A derived type, CLASS(*), or other declaration-type-spec Stage 3
-//       doesn't support.
-//
-// <array-spec> shapes:
-//   {"kind": "explicit", "shape": [{"lb": expr|null, "ub": expr}, ...]}
-//       Only explicit-shape (`(lb:ub)`) arrays are supported - the only
-//       kind that makes sense for a value/kernel-parameter array with no
-//       runtime shape information. lb is null when the spec omitted a
-//       lower bound (implying a lower bound of 1).
-//   {"kind": "unsupported"}
-//       Assumed-shape/deferred-shape/assumed-size/assumed-rank - none of
-//       which are legal for OP2 kernel parameters or locals anyway.
-//
-// Anything not recognised anywhere in this section (EXTERNAL statements,
-// USE statements, IMPLICIT statements, ...) is simply not emitted at all,
-// matching how the fparser2 path's `removeExternals` and
-// `translateSpecificationPart`'s `Use_Stmt`/`Implicit_Part` handling both
-// silently skip these constructs.
-
 /**
  * @brief R709 kind-param, as it appears on an intrinsic type spec (`REAL(8)`, `INTEGER(kind=IK)`, ...).
  *
- * Returns nullopt for the (rare) `KIND=*` assumed-size-character-style StarSize form, which Stage 3 doesn't need.
+ * Returns nullopt for the (rare) `KIND=*` assumed-size-character-style StarSize form.
  *
  * @param ks Optional kind selector on an intrinsic type spec.
  * @return Kind-selector source text, or nullopt if absent or of an unsupported form.
@@ -1579,7 +1434,7 @@ static void emitCharLength(Json &json, const fp::CharLength &cl)
 }
 
 /**
- * @brief R721 char-selector, in full: either a bare length-selector or the `(LEN=..., KIND=...)` form (whose kind we ignore - Stage 3 only supports default-kind CHARACTER, same as the fparser2 path).
+ * @brief R721 char-selector, in full: either a bare length-selector or the `(LEN=..., KIND=...)` form (whose kind we ignore
  *
  * @param json JSON writer to append into.
  * @param cs Optional character selector (`*n` or `(LEN=..., KIND=...)`).
@@ -1980,46 +1835,6 @@ struct DeclCollector {
     void Post(const T &)
     {}
 };
-
-// Statement-tree serialization (for Stage 3 C++ code generation)
-//
-// Unlike BodyCollector (which flattens the body for Stage 2's "does this
-// exist anywhere" checks), Stage 3 code generation needs control-flow
-// structure preserved - an `if`/`do` body must nest inside its construct,
-// not sit next to it in a flat list. This is a straightforward hand-written
-// recursive descent over Block (= list<ExecutionPartConstruct>), mirroring
-// fortran/translator/kernels_c.py's translateExecutionPart /
-// translateIfConstruct / translateBlockNonlabelDoConstruct - just building
-// a JSON tree instead of a C++ source string.
-//
-// Node shapes (all objects have a "kind" field):
-//   {"kind": "assign", "line": int, "lhs": <variable-expr>, "rhs": expr}
-//   {"kind": "call", "line": int, "name": str, "args": [expr, ...]}
-//   {"kind": "continue"}
-//   {"kind": "return"}
-//   {"kind": "stop"}
-//   {"kind": "write"}
-//       Always translated as a no-op/comment, matching translateWriteStmt;
-//       we don't bother capturing the write's format/arguments.
-//   {"kind": "if_stmt", "cond": expr, "stmt": <single nested stmt>}
-//       The single-line `IF (cond) stmt` form (R1139).
-//   {"kind": "if_construct",
-//    "branches": [{"cond": expr|null, "body": [stmt, ...]}, ...]}
-//       One entry per THEN/ELSE IF/ELSE block, in source order; "cond" is
-//       null for a trailing ELSE (there is at most one, always last).
-//   {"kind": "do", "mode": "counted"|"while"|"unsupported",
-//    "var": str, "lb": expr, "ub": expr, "step": expr|null,   (counted)
-//    "cond": expr,                                            (while)
-//    "body": [stmt, ...]}
-//       "counted" is `DO i = lb, ub[, step]`; "while" is `DO WHILE (cond)`;
-//       "unsupported" covers `DO CONCURRENT` and the bare infinite `DO`
-//       (neither of which fortran/translator/kernels_c.py's
-//       translateBlockNonlabelDoConstruct supports either).
-//   {"kind": "data_stmt", "sets": [...]}  (see emitDataStmtNode)
-//   {"kind": "unsupported", "tag": "<node-name>"}
-//       Anything else (ALLOCATE, GOTO, SELECT CASE, WHERE, labelled DO,
-//       ...) - matches the (mostly commented-out) gaps in
-//       fortran/translator/kernels_c.py's TRANSLATE_TABLE.
 
 static void emitBlock(Json &json, const fp::Block &block, const fp::AllCookedSources &cooked);
 
@@ -2780,7 +2595,7 @@ struct Scanner {
             json.stringValue("");
         }
 
-        // Stage 2 validation data: local array declarations (for the
+        // validation data: local array declarations (for the
         // runtime-dimension check) and a flattened assignment/call walk of
         // the execution part (for read/inc/slice/const-write checks). See
         // the LocalsCollector / BodyCollector doc comments above.
@@ -2805,9 +2620,9 @@ struct Scanner {
         json.key("calls");
         json.rawValue(callsJson.str());
 
-        // Stage 3 data: full typed declarations and a nested statement
+        // full typed declarations and a nested statement
         // tree (see the doc comments above DeclCollector / emitBlock).
-        // These are additive to (and independent of) the Stage 2 fields
+        // These are additive to (and independent of) the validation fields
         // above - fortran/flang_kernels_c.py never reads "locals"/
         // "assignments"/"calls", and fortran/flang_validator.py never
         // reads "decls"/"stmts".
