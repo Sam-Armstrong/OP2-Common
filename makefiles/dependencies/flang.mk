@@ -1,6 +1,4 @@
-# Optional LLVM Flang parser libraries used to build op2-flang-scan.
-# This is the Flang *parser*, not a Fortran compiler for building OP2 apps
-# (those are still selected via OP2_F_COMPILER).
+# Optional LLVM Flang parser libraries used to build op2-flang-scan
 
 ifdef FLANG_INSTALL_PATH
   LLVM_INSTALL_PATH ?= $(FLANG_INSTALL_PATH)
@@ -12,8 +10,7 @@ ifneq ($(shell which $(CONFIG_FLANG_SCAN_CMAKE) 2>/dev/null),)
   CONFIG_HAVE_CMAKE := true
 endif
 
-# True iff $(1) looks like an LLVM prefix that includes Flang parser headers
-# and the LLVM CMake package that op2-flang-scan's CMakeLists.txt needs.
+# True if $(1) looks like an LLVM prefix that includes Flang parser headers and the LLVM CMake
 define flang_prefix_ok
 $(and $(wildcard $(1)/include/flang/Parser/parsing.h),\
       $(wildcard $(1)/lib/cmake/llvm/LLVMConfig.cmake),\
@@ -37,7 +34,6 @@ ifneq ($(LLVM_CONFIG_PREFIX),)
   FLANG_PREFIX_CANDIDATES += $(LLVM_CONFIG_PREFIX)
 endif
 
-# Newest versioned /usr/lib/llvm-* first, then a plain /usr prefix.
 FLANG_PREFIX_CANDIDATES += $(shell ls -d /usr/lib/llvm-[0-9]* 2>/dev/null | sort -V -r)
 FLANG_PREFIX_CANDIDATES += /usr
 
