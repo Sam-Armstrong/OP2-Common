@@ -1,27 +1,13 @@
 """
 Flang/JSON-tree equivalents of the fparser2 AST mutations in
-``fortran.translator.kernels`` that ``fortran/schemes.py`` applies to kernel
-entities before Stage 3 (kernel-to-C++) translation.
+``fortran.translator.kernels`` that ``fortran/schemes.py`` applies
+to kernel entities before kernel-to-C++ translation.
 
-    fparser2 helper (fortran.translator.kernels)   flang_kernels equivalent
-    ---------------------------------------------  --------------------------
-    renameConsts(lang, entities, app, replace)      rename_consts
-    fixHydraIO(func)                                fix_hydra_io
-    removeExternals(func)                           (nothing to do - see below)
-    insertAtomicIncs(..., c_api=True)               insert_atomic_incs
-
-These operate in place on each entity's ``flang_body["decls"]``/``["stmts"]``
-(the Stage 3 typed-declaration / nested-statement JSON documented above
-``DeclCollector``/``emitBlock`` in ``op2-flang-scan.cpp``), which is why they
-live alongside ``fortran/flang_kernels_c.py`` rather than ``flang_writer.py``
-(which mutates the *text* of ``flang_source`` for the Fortran-output `seq`
-scheme instead).
-
-``removeExternals`` has no Flang equivalent because there is nothing to
-remove: ``op2-flang-scan``'s ``DeclCollector`` only ever emits nodes for the
-declaration forms Stage 3 understands (``type_decl``/``parameter_stmt``/
-``data_stmt``); an ``EXTERNAL`` statement is simply never turned into a JSON
-node in the first place, so it is already absent from ``decls``.
+fparser2 helper (fortran.translator.kernels)  flang_kernels equivalent
+--------------------------------------------  --------------------------
+renameConsts                                  rename_consts
+fixHydraIO                                    fix_hydra_io
+insertAtomicIncs                              insert_atomic_incs
 """
 
 from __future__ import annotations
@@ -34,15 +20,15 @@ from op import OpError
 from store import Function
 
 
-# -----------------------------------------------------------------------------
 # Generic JSON-tree walk helpers
-# -----------------------------------------------------------------------------
 
-def _walk_stmt_bodies(stmts: List[Dict[str, Any]], visit_body: Callable[[List[Dict[str, Any]]], bool]) -> bool:
+def _walk_stmt_bodies(
+    stmts: List[Dict[str, Any]],
+    visit_body: Callable[[List[Dict[str, Any]]], bool],
+) -> bool:
     """
     Call `visit_body` on `stmts` and on every nested body reachable through
-    if/do control flow (if_stmt's single nested statement is treated as a
-    one-element body). Returns True iff `visit_body` returned True for any
+    if/do control flow. Returns True if `visit_body` returned True for any
     of them.
     """
     modified = visit_body(stmts)
@@ -63,21 +49,13 @@ def _walk_stmt_bodies(stmts: List[Dict[str, Any]], visit_body: Callable[[List[Di
     return modified
 
 
-# -----------------------------------------------------------------------------
 # rename_consts
-# -----------------------------------------------------------------------------
 
 def _rename_idents(node: Any, targets: Set[str], replacement: Callable[[str], str]) -> None:
     """
     Recursively rename every "name"/"part_ref"/"funcref" identifier
-    occurrence (and "do" loop control variables) within a Stage 3
-    decls/stmts JSON subtree whose identifier is in `targets`. Mutates
-    `node` (a dict or list) in place.
-
-    Unlike fparser2's `renameConsts` (which walks every bare `Name` node,
-    including call targets), this deliberately leaves a statement's own
-    "call"/"name" callee field untouched - a const can't legally share a
-    name with a subprogram, so there is nothing to rename there.
+    occurrence (and "do" loop control variables) within a decls/stmts
+    JSON subtree whose identifier is in `targets`.
     """
     if isinstance(node, list):
         for item in node:
@@ -100,7 +78,9 @@ def _rename_idents(node: Any, targets: Set[str], replacement: Callable[[str], st
 
 
 def rename_consts(entities: List[Function], const_ptrs: Set[str], replacement: Callable[[str], str]) -> None:
-    """Flang-JSON equivalent of fortran.translator.kernels.renameConsts."""
+    """
+    Flang equivalent of fortran.translator.kernels.renameConsts.
+    """
     for entity in entities:
         body = getattr(entity, "flang_body", None)
         if body is None:
@@ -114,9 +94,7 @@ def rename_consts(entities: List[Function], const_ptrs: Set[str], replacement: C
         _rename_idents(body.get("stmts", []), targets, replacement)
 
 
-# -----------------------------------------------------------------------------
 # fix_hydra_io
-# -----------------------------------------------------------------------------
 
 _HYDRA_CLOBBER_CALLS = {
     "hyd_print", "hyd_dump", "hyd_kill", "hyd_error_print", "hyd_error_dump",
@@ -142,14 +120,11 @@ def _replace_hydra_calls(stmts: List[Dict[str, Any]]) -> bool:
 
 def fix_hydra_io(entities: List[Function]) -> None:
     """
-    Flang-JSON equivalent of fortran.translator.kernels.fixHydraIO.
+    Flang equivalent of fortran.translator.kernels.fixHydraIO.
 
-    Unlike the fparser2 path, WRITE statements need no rewrite here:
+    Unlike the fparser2 path, WRITE statements need no rewrite here as
     fortran/flang_kernels_c.py's statement translator already turns every
-    "write" node into a no-op comment unconditionally (mirroring
-    translateWriteStmt), so there's nothing to clobber. Only the hydra
-    helper *calls* need rewriting, since otherwise they'd be translated as
-    real (nonexistent in C++) function calls.
+    "write" node into a no-op comment, so there's nothing to clobber.
     """
     for entity in entities:
         body = getattr(entity, "flang_body", None)
@@ -158,47 +133,7 @@ def fix_hydra_io(entities: List[Function]) -> None:
         _walk_stmt_bodies(body.get("stmts", []), _replace_hydra_calls)
 
 
-# -----------------------------------------------------------------------------
 # insert_atomic_incs
-# -----------------------------------------------------------------------------
-
-def _zero_literal(typ: OP.Type) -> Dict[str, Any]:
-    if isinstance(typ, OP.Int):
-        return {"kind": "int_lit", "text": "0", "kind_text": None}
-    elif isinstance(typ, OP.Float) and typ.size == 32:
-        return {"kind": "real_lit", "text": "0.0", "kind_text": None}
-    elif isinstance(typ, OP.Float) and typ.size == 64:
-        return {"kind": "real_lit", "text": "0.0", "kind_text": "8"}
-    else:
-        raise OpError(f"Error: unexpected arg type while inserting atomics: {typ}")
-
-
-def _substitute_ref_with_zero(expr: Dict[str, Any], ref_name: str, typ: OP.Type) -> Dict[str, Any]:
-    """
-    Port of insertAtomicInc2's `replaceNodes(rhs, str(n) == str(lhs), zero)`:
-    replace every whole-occurrence of `ref_name` inside `expr` with a zero
-    literal of the appropriate type, preserving the rest of the tree shape
-    (e.g. `res1(1) + f` becomes `0 + f`, not simplified to `f`).
-    """
-    if is_ref(expr, ref_name):
-        return _zero_literal(typ)
-
-    kind = expr.get("kind")
-    if kind == "binary":
-        return {
-            **expr,
-            "left": _substitute_ref_with_zero(expr["left"], ref_name, typ),
-            "right": _substitute_ref_with_zero(expr["right"], ref_name, typ),
-        }
-    if kind in ("paren", "unary"):
-        return {**expr, "expr": _substitute_ref_with_zero(expr["expr"], ref_name, typ)}
-
-    # part_ref/funcref/literals: a nested (rather than whole) occurrence of
-    # ref_name here doesn't happen for the +/- increment shapes OP2 kernels
-    # actually use, so we leave these untouched (same scope restriction
-    # kernels_c.py's insertAtomicInc2 has via its Level_2_Expr check).
-    return expr
-
 
 def _replace_increments(stmts: List[Dict[str, Any]], param: str, typ: OP.Type) -> bool:
     modified = False
@@ -216,14 +151,42 @@ def _replace_increments(stmts: List[Dict[str, Any]], param: str, typ: OP.Type) -
     return modified
 
 
+def _substitute_ref_with_zero(expr: Dict[str, Any], ref_name: str, typ: OP.Type) -> Dict[str, Any]:
+    """
+    Replace every whole occurrence of `ref_name` inside `expr` with a zero
+    literal of the appropriate type, preserving the rest of the tree shape.
+    """
+    if is_ref(expr, ref_name):
+        return _zero_literal(typ)
+
+    kind = expr.get("kind")
+    if kind == "binary":
+        return {
+            **expr,
+            "left": _substitute_ref_with_zero(expr["left"], ref_name, typ),
+            "right": _substitute_ref_with_zero(expr["right"], ref_name, typ),
+        }
+    if kind in ("paren", "unary"):
+        return {**expr, "expr": _substitute_ref_with_zero(expr["expr"], ref_name, typ)}
+
+    return expr
+
+
+def _zero_literal(typ: OP.Type) -> Dict[str, Any]:
+    if isinstance(typ, OP.Int):
+        return {"kind": "int_lit", "text": "0", "kind_text": None}
+    elif isinstance(typ, OP.Float) and typ.size == 32:
+        return {"kind": "real_lit", "text": "0.0", "kind_text": None}
+    elif isinstance(typ, OP.Float) and typ.size == 64:
+        return {"kind": "real_lit", "text": "0.0", "kind_text": "8"}
+    else:
+        raise OpError(f"Error: unexpected arg type while inserting atomics: {typ}")
+
+
 def insert_atomic_incs(entities: List[Function], loop: OP.Loop, match: Callable[[OP.Arg], bool]) -> None:
     """
-    Flang-JSON equivalent of fortran.translator.kernels.insertAtomicIncs
-    with ``c_api=True`` - the only mode fortran/schemes.py's FortranCCuda /
-    FortranCHip ever use. Rewrites `param = param +/- expr` into
-    `call atomicAdd(param, expr)` for every dummy parameter (of the kernel,
-    or of anything it transitively calls) that a matching OP_INC loop
-    argument maps onto.
+    Rewrites `param = param +/- expr` into `call atomicAdd(param, expr)` for
+    every dummy parameter that a matching OP_INC loop argument maps onto.
     """
     if len(entities) == 0:
         return
