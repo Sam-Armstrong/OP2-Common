@@ -474,8 +474,8 @@ static void emitExpr(Json &json, const fp::Expr &e)
                 json.key("kind");
                 json.stringValue("name");
                 json.key("value");
-                json.stringValue(*name)
-                    json.endObject();
+                json.stringValue(*name);
+                json.endObject();
                 return true;
             }
         }
