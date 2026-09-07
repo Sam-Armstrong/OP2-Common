@@ -438,6 +438,24 @@ def checkRuntimeDimensionArrays(func: Function, consts: Set[str], violations: Li
                 violations.append(f"In {func.name}: variable {name}, dimension {dim_name}")
 
 
+def _param_has_array_shape(func: Function, param: str) -> bool:
+    """
+    True if `param` has an array spec in ``flang_body["decls"]``.
+
+    Mirrors fparser2's ``parseDimensions(...) is not None`` guard in
+    ``checkSlice``: scalar dummies are not subject to slice/stride checks.
+    """
+    for decl in _flang_body(func).get("decls", []):
+        if decl.get("kind") != "type_decl":
+            continue
+        attr_dim = decl.get("dim")
+        for ent in decl.get("entities", []):
+            if ent.get("name") != param:
+                continue
+            return (ent.get("dim") or attr_dim) is not None
+    return False
+
+
 def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations: List[str]) -> None:
     """
     Equivalent to fortran.validator's checkSlice. Appends a violation if
@@ -445,6 +463,9 @@ def checkSlice(func: Function, param_idx: int, funcs: List[Function], violations
     slice/section, which is incompatible with stride insertion.
     """
     param = func.parameters[param_idx]
+    if not _param_has_array_shape(func, param):
+        return
+
     known_names = {f.name for f in funcs}
 
     def msg(line: int) -> str:

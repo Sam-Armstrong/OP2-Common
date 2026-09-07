@@ -529,23 +529,47 @@ def _replace_fortran_increments(source: str, param: str, typ: OP.Type) -> Tuple[
             out.append(line)
             continue
 
-        if not re.search(r"[+\-]", rhs):
-            out.append(line)
-            continue
-
-        if lhs_l not in rhs.lower():
+        if not _rhs_is_increment_of(lhs, rhs):
             out.append(line)
             continue
 
         zero = _zero_literal_fortran(typ)
-
-        # replace whole lhs occurrences in rhs
-        amount = re.sub(re.escape(lhs), zero, rhs, flags=re.IGNORECASE)
+        amount = _replace_lhs_with_zero(rhs, lhs, zero)
         newline = "\n" if line.endswith("\n") else ""
         out.append(f"{indent}op2_ret = atomicAdd({lhs}, {amount}){trailing}{newline}")
         changed = True
 
     return "".join(out), changed
+
+
+def _lhs_token_pattern(lhs: str) -> str:
+    """
+    Regex for a whole LHS reference. Bare names use a word boundary so
+    ``res`` does not match inside ``residual``.
+    """
+    escaped = re.escape(lhs)
+    if "(" in lhs:
+        return escaped
+    return rf"\b{escaped}\b"
+
+
+def _rhs_is_increment_of(lhs: str, rhs: str) -> bool:
+    """
+    True if `rhs` looks like ``lhs +/- expr`` or ``expr +/- lhs``.
+    """
+    token = _lhs_token_pattern(lhs)
+    return re.search(
+        rf"{token}\s*[+\-]|[+\-]\s*{token}",
+        rhs,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def _replace_lhs_with_zero(rhs: str, lhs: str, zero: str) -> str:
+    """
+    Replace whole occurrences of `lhs` in `rhs` with `zero`.
+    """
+    return re.sub(_lhs_token_pattern(lhs), zero, rhs, flags=re.IGNORECASE)
 
 
 def _split_top_level_args(arglist: str) -> List[str]:

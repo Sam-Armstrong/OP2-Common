@@ -877,6 +877,44 @@ static void emitVariable(Json &json, const fp::Variable &v)
         v.u);
 }
 
+/**
+ * @brief Source range of an assignment LHS, used for diagnostic line numbers.
+ *
+ * Prefer the designator (or function-reference name) over the RHS, so a
+ * continued assignment reports the line of `lhs =` rather than the last
+ * continued RHS fragment.
+ */
+static fp::CharBlock variableSource(const fp::Variable &v)
+{
+    return std::visit([](const auto &alt) -> fp::CharBlock {
+        using T = std::decay_t<decltype(alt)>;
+        if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::Designator>>) {
+            return alt.value().source;
+        } else if constexpr (std::is_same_v<T, Fortran::common::Indirection<fp::FunctionReference>>) {
+            const fp::ProcedureDesignator &pd = std::get<fp::ProcedureDesignator>(alt.value().v.t);
+            fp::CharBlock src;
+            std::visit([&](const auto &p) {
+                using U = std::decay_t<decltype(p)>;
+                if constexpr (std::is_same_v<U, fp::Name>) {
+                    src = p.source;
+                }
+            },
+                pd.u);
+            return src;
+        }
+        return fp::CharBlock{};
+    },
+        v.u);
+}
+
+static fp::CharBlock assignmentLineSource(const fp::AssignmentStmt &assign)
+{
+    const auto &lhs = std::get<fp::Variable>(assign.t);
+    const auto &rhs = std::get<fp::Expr>(assign.t);
+    fp::CharBlock src = variableSource(lhs);
+    return src.empty() ? rhs.source : src;
+}
+
 static void emitBodyExpr(Json &json, const fp::Expr &e)
 {
     bool emitted = std::visit([&](const auto &alt) -> bool {
@@ -1093,7 +1131,7 @@ struct BodyCollector {
     {
         const auto &lhs = std::get<fp::Variable>(assign.t);
         const auto &rhs = std::get<fp::Expr>(assign.t);
-        auto [line, col] = resolveLineCol(rhs.source);
+        auto [line, col] = resolveLineCol(assignmentLineSource(assign));
 
         jsonAssignments.beginObject();
         jsonAssignments.key("line");
@@ -1737,7 +1775,7 @@ static void emitActionStmt(Json &json, const fp::ActionStmt &a, const fp::AllCoo
             const fp::AssignmentStmt &as = alt.value();
             const auto &lhs = std::get<fp::Variable>(as.t);
             const auto &rhs = std::get<fp::Expr>(as.t);
-            auto [line, col] = resolveLineColStmt(cooked, rhs.source);
+            auto [line, col] = resolveLineColStmt(cooked, assignmentLineSource(as));
 
             json.beginObject();
             json.key("kind");

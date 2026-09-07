@@ -30,13 +30,18 @@ def _walk_stmt_bodies(
     Call `visit_body` on `stmts` and on every nested body reachable through
     if/do control flow. Returns True if `visit_body` returned True for any
     of them.
+
+    ``if_stmt`` children are walked via a one-element list, then written
+    back so replacements of the inner statement stick on the parent node.
     """
     modified = visit_body(stmts)
 
     for stmt in stmts:
         kind = stmt.get("kind")
         if kind == "if_stmt":
-            if _walk_stmt_bodies([stmt["stmt"]], visit_body):
+            inner = [stmt["stmt"]]
+            if _walk_stmt_bodies(inner, visit_body):
+                stmt["stmt"] = inner[0]
                 modified = True
         elif kind == "if_construct":
             for branch in stmt.get("branches", []):
@@ -47,6 +52,46 @@ def _walk_stmt_bodies(
                 modified = True
 
     return modified
+
+
+def _resync_flat_views(body: Dict[str, Any]) -> None:
+    """
+    Rebuild ``assignments`` and ``calls`` from ``stmts``.
+
+    The scanner emits those flat lists in parallel with the statement tree.
+    Kernel rewrites only mutate ``stmts``, so analysis that still reads the
+    flat views (``resolveParamAccesses``, the validator on a rewritten copy)
+    must see the same tree.
+    """
+    assignments: List[Dict[str, Any]] = []
+    calls: List[Dict[str, Any]] = []
+
+    def walk(stmts: List[Dict[str, Any]]) -> None:
+        for stmt in stmts:
+            kind = stmt.get("kind")
+            if kind == "assign":
+                assignments.append({
+                    "line": stmt.get("line", 0),
+                    "lhs": stmt["lhs"],
+                    "rhs": stmt["rhs"],
+                })
+            elif kind == "call":
+                calls.append({
+                    "line": stmt.get("line", 0),
+                    "name": stmt.get("name"),
+                    "args": stmt.get("args", []),
+                })
+            elif kind == "if_stmt":
+                walk([stmt["stmt"]])
+            elif kind == "if_construct":
+                for branch in stmt.get("branches", []):
+                    walk(branch.get("body", []))
+            elif kind == "do":
+                walk(stmt.get("body", []))
+
+    walk(body.get("stmts", []))
+    body["assignments"] = assignments
+    body["calls"] = calls
 
 
 # rename_consts
@@ -92,6 +137,11 @@ def rename_consts(entities: List[Function], const_ptrs: Set[str], replacement: C
 
         _rename_idents(body.get("decls", []), targets, replacement)
         _rename_idents(body.get("stmts", []), targets, replacement)
+        for local in body.get("locals", []):
+            dims = local.get("dims")
+            if isinstance(dims, list):
+                local["dims"] = [replacement(d) if d in targets else d for d in dims]
+        _resync_flat_views(body)
 
 
 # fix_hydra_io
@@ -131,23 +181,41 @@ def fix_hydra_io(entities: List[Function]) -> None:
         if body is None:
             continue
         _walk_stmt_bodies(body.get("stmts", []), _replace_hydra_calls)
+        _resync_flat_views(body)
 
 
 # insert_atomic_incs
 
+def _unwrap_parens(expr: Dict[str, Any]) -> Dict[str, Any]:
+    while expr.get("kind") == "paren":
+        expr = expr["expr"]
+    return expr
+
+
+def _is_add_or_sub_expr(expr: Dict[str, Any]) -> bool:
+    """
+    True if `expr` is a `+`/`-` binary expression (fparser2 Level_2_Expr).
+    Parentheses are unwrapped so `param = (param + x)` still counts.
+    """
+    expr = _unwrap_parens(expr)
+    return expr.get("kind") == "binary" and expr.get("op") in ("+", "-")
+
+
 def _replace_increments(stmts: List[Dict[str, Any]], param: str, typ: OP.Type) -> bool:
     modified = False
     for i, stmt in enumerate(stmts):
-        if stmt.get("kind") == "assign" and is_ref(stmt["lhs"], param):
-            amount = _substitute_ref_with_zero(stmt["rhs"], param, typ)
-            stmts[i] = {"kind": "call", "line": stmt.get("line", 0), "name": "atomicAdd", "args": [stmt["lhs"], amount]}
-            modified = True
-        elif stmt.get("kind") == "if_stmt":
-            inner = stmt["stmt"]
-            if inner.get("kind") == "assign" and is_ref(inner["lhs"], param):
-                amount = _substitute_ref_with_zero(inner["rhs"], param, typ)
-                stmt["stmt"] = {"kind": "call", "line": inner.get("line", 0), "name": "atomicAdd", "args": [inner["lhs"], amount]}
-                modified = True
+        if stmt.get("kind") != "assign" or not is_ref(stmt["lhs"], param):
+            continue
+        if not _is_add_or_sub_expr(stmt["rhs"]):
+            raise OpError(f"Error: unexpected statement while inserting atomics")
+        amount = _substitute_ref_with_zero(stmt["rhs"], param, typ)
+        stmts[i] = {
+            "kind": "call",
+            "line": stmt.get("line", 0),
+            "name": "atomicAdd",
+            "args": [stmt["lhs"], amount],
+        }
+        modified = True
     return modified
 
 
@@ -215,6 +283,7 @@ def insert_atomic_incs(entities: List[Function], loop: OP.Loop, match: Callable[
             param_name = entity2.parameters[param_idx2]
             if _walk_stmt_bodies(body.get("stmts", []), lambda stmts: _replace_increments(stmts, param_name, typ2)):
                 modified.setdefault(entity2.name, set()).add(param_idx2)
+                _resync_flat_views(body)
 
             return False
 
