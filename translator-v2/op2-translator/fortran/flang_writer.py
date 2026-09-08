@@ -464,6 +464,17 @@ def _iter_param_indexings(source: str, param: str) -> List[Tuple[int, int, str]]
     return hits
 
 
+def _lhs_token_pattern(lhs: str) -> str:
+    """
+    Regex for a whole LHS reference. Bare names use a word boundary so
+    ``res`` does not match inside ``residual``.
+    """
+    escaped = re.escape(lhs)
+    if "(" in lhs:
+        return escaped
+    return rf"\b{escaped}\b"
+
+
 def _param_dims(entity: Function, param: str) -> Optional[List[Tuple[str, Optional[str]]]]:
     """
     Return explicit shape bounds for `param` from ``flang_body["decls"]``, or
@@ -542,15 +553,11 @@ def _replace_fortran_increments(source: str, param: str, typ: OP.Type) -> Tuple[
     return "".join(out), changed
 
 
-def _lhs_token_pattern(lhs: str) -> str:
+def _replace_lhs_with_zero(rhs: str, lhs: str, zero: str) -> str:
     """
-    Regex for a whole LHS reference. Bare names use a word boundary so
-    ``res`` does not match inside ``residual``.
+    Replace whole occurrences of `lhs` in `rhs` with `zero`.
     """
-    escaped = re.escape(lhs)
-    if "(" in lhs:
-        return escaped
-    return rf"\b{escaped}\b"
+    return re.sub(_lhs_token_pattern(lhs), zero, rhs, flags=re.IGNORECASE)
 
 
 def _rhs_is_increment_of(lhs: str, rhs: str) -> bool:
@@ -563,13 +570,6 @@ def _rhs_is_increment_of(lhs: str, rhs: str) -> bool:
         rhs,
         flags=re.IGNORECASE,
     ) is not None
-
-
-def _replace_lhs_with_zero(rhs: str, lhs: str, zero: str) -> str:
-    """
-    Replace whole occurrences of `lhs` in `rhs` with `zero`.
-    """
-    return re.sub(_lhs_token_pattern(lhs), zero, rhs, flags=re.IGNORECASE)
 
 
 def _split_top_level_args(arglist: str) -> List[str]:

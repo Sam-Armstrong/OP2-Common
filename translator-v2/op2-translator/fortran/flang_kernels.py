@@ -22,38 +22,6 @@ from store import Function
 
 # Generic JSON-tree walk helpers
 
-def _walk_stmt_bodies(
-    stmts: List[Dict[str, Any]],
-    visit_body: Callable[[List[Dict[str, Any]]], bool],
-) -> bool:
-    """
-    Call `visit_body` on `stmts` and on every nested body reachable through
-    if/do control flow. Returns True if `visit_body` returned True for any
-    of them.
-
-    ``if_stmt`` children are walked via a one-element list, then written
-    back so replacements of the inner statement stick on the parent node.
-    """
-    modified = visit_body(stmts)
-
-    for stmt in stmts:
-        kind = stmt.get("kind")
-        if kind == "if_stmt":
-            inner = [stmt["stmt"]]
-            if _walk_stmt_bodies(inner, visit_body):
-                stmt["stmt"] = inner[0]
-                modified = True
-        elif kind == "if_construct":
-            for branch in stmt.get("branches", []):
-                if _walk_stmt_bodies(branch.get("body", []), visit_body):
-                    modified = True
-        elif kind == "do":
-            if _walk_stmt_bodies(stmt.get("body", []), visit_body):
-                modified = True
-
-    return modified
-
-
 def _resync_flat_views(body: Dict[str, Any]) -> None:
     """
     Rebuild ``assignments`` and ``calls`` from ``stmts``.
@@ -92,6 +60,38 @@ def _resync_flat_views(body: Dict[str, Any]) -> None:
     walk(body.get("stmts", []))
     body["assignments"] = assignments
     body["calls"] = calls
+
+
+def _walk_stmt_bodies(
+    stmts: List[Dict[str, Any]],
+    visit_body: Callable[[List[Dict[str, Any]]], bool],
+) -> bool:
+    """
+    Call `visit_body` on `stmts` and on every nested body reachable through
+    if/do control flow. Returns True if `visit_body` returned True for any
+    of them.
+
+    ``if_stmt`` children are walked via a one-element list, then written
+    back so replacements of the inner statement stick on the parent node.
+    """
+    modified = visit_body(stmts)
+
+    for stmt in stmts:
+        kind = stmt.get("kind")
+        if kind == "if_stmt":
+            inner = [stmt["stmt"]]
+            if _walk_stmt_bodies(inner, visit_body):
+                stmt["stmt"] = inner[0]
+                modified = True
+        elif kind == "if_construct":
+            for branch in stmt.get("branches", []):
+                if _walk_stmt_bodies(branch.get("body", []), visit_body):
+                    modified = True
+        elif kind == "do":
+            if _walk_stmt_bodies(stmt.get("body", []), visit_body):
+                modified = True
+
+    return modified
 
 
 # rename_consts
@@ -186,12 +186,6 @@ def fix_hydra_io(entities: List[Function]) -> None:
 
 # insert_atomic_incs
 
-def _unwrap_parens(expr: Dict[str, Any]) -> Dict[str, Any]:
-    while expr.get("kind") == "paren":
-        expr = expr["expr"]
-    return expr
-
-
 def _is_add_or_sub_expr(expr: Dict[str, Any]) -> bool:
     """
     True if `expr` is a `+`/`-` binary expression (fparser2 Level_2_Expr).
@@ -237,6 +231,12 @@ def _substitute_ref_with_zero(expr: Dict[str, Any], ref_name: str, typ: OP.Type)
     if kind in ("paren", "unary"):
         return {**expr, "expr": _substitute_ref_with_zero(expr["expr"], ref_name, typ)}
 
+    return expr
+
+
+def _unwrap_parens(expr: Dict[str, Any]) -> Dict[str, Any]:
+    while expr.get("kind") == "paren":
+        expr = expr["expr"]
     return expr
 
 
